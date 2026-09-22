@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Secrets — never commit the OpenRouter key
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.swp
