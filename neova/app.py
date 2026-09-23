@@ -1,12 +1,15 @@
 """Local FastAPI application hosting the foundation graph and SQLite seed."""
 
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from .config import ConfigurationError
 from .db import close_session_connections, init_db
 from .graph import compiled
+from .models import chat_model
 from .session import fixture_customers, issue_session
 
 
@@ -38,6 +41,11 @@ class GraphRequest(BaseModel):
     prompt: str
 
 
+class ChatRequest(BaseModel):
+    prompt: str
+    provider: Literal["openrouter", "openai"]
+
+
 class DemoSessionRequest(BaseModel):
     customer_id: str
 
@@ -56,3 +64,13 @@ def run_graph(graph_request: GraphRequest):
     """Exercise the bounded graph, never a customer-facing reply."""
     result = compiled.invoke({"input": graph_request.prompt, "history": []})
     return {"classification": result["classification"], "output": result["output"]}
+
+
+@app.post("/models/chat")
+def run_model_chat(request: ChatRequest):
+    """Invoke the selected provider without changing the foundation graph."""
+    try:
+        model = chat_model(request.provider)
+    except ConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from None
+    return {"provider": request.provider, "output": model.invoke(request.prompt).content}
