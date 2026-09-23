@@ -34,7 +34,7 @@ jobs:
         run: uv sync --locked
 
       - name: Compile Python source
-        run: uv run --locked python -m compileall -q main.py
+        run: uv run --locked python -m compileall -q main.py neova tests
 
-      - name: Run smoke test
-        run: uv run --locked python main.py
+      - name: Run foundation tests
+        run: uv run --locked pytest -q tests/
