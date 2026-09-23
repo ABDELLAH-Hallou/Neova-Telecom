@@ -13,8 +13,15 @@ def _db_path() -> str:
     """Return the database path from URL (support SQLite only for now)."""
     url = get_database_url()
     if url.startswith("sqlite:///"):
-        return url.replace("sqlite:///","")
+        return url.removeprefix("sqlite:///")
     raise RuntimeError("Only SQLite DATABASE_URL supported in foundation")
+
+
+def connect(db_path: str | None = None) -> sqlite3.Connection:
+    """Open a SQLite connection with foreign keys enforced."""
+    conn = sqlite3.connect(db_path if db_path is not None else _db_path())
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def _seed_hash() -> str:
@@ -75,7 +82,7 @@ def _seed_incidents(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
                 json.dumps(incident["postal_codes"]),
                 incident["status"],
                 incident["cause"],
-                json.dumps(incident["affected_customers"]),
+                incident["affected_customers"],
                 incident["started_at"],
                 incident["estimated_resolution"],
             ),
@@ -92,7 +99,7 @@ def _seed_slots(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
         conn.execute(
             """
             INSERT INTO slots
-            (slot_id, postal_codes, start, end, available)
+            (slot_id, postal_codes, "start", "end", available)
             VALUES (?, ?, ?, ?, ?)
             """,
             (
@@ -107,33 +114,40 @@ def _seed_slots(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
 
 
 def _seed_reasons(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
-    """Insert appointment reasons if table is empty; return count."""
+    """Insert appointment reasons if table is empty; return count.
+
+    The fixture reason strings are themselves the stable unique IDs, so
+    later booking rows can reference them directly as foreign keys.
+    """
     existing = conn.execute("SELECT COUNT(*) FROM reasons").fetchone()[0]
     if existing > 0:
         return existing
-    for i, reason_id in enumerate(data["appointment_reasons"], start=1):
+    for reason_id in data["appointment_reasons"]:
         conn.execute(
             """
             INSERT INTO reasons (reason_id, label, description)
             VALUES (?, ?, ?)
             """,
-            (f"reason_{i}", reason_id, reason_id),
+            (reason_id, reason_id, reason_id),
         )
     return len(data["appointment_reasons"])
 
 
 def _seed_categories(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
-    """Insert escalation categories if table is empty; return count."""
+    """Insert escalation categories if table is empty; return count.
+
+    As with reasons, the fixture category strings are the stable IDs.
+    """
     existing = conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
     if existing > 0:
         return existing
-    for i, category_id in enumerate(data["escalation_categories"], start=1):
+    for category_id in data["escalation_categories"]:
         conn.execute(
             """
             INSERT INTO categories (category_id, label, description)
             VALUES (?, ?, ?)
             """,
-            (f"category_{i}", category_id, category_id),
+            (category_id, category_id, category_id),
         )
     return len(data["escalation_categories"])
 
@@ -141,8 +155,8 @@ def _seed_categories(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
 def init_db() -> None:
     """Create schema and seed fixture if empty; idempotent on restart."""
     db_path = _db_path()
-    Path(db_path).parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(db_path)
     try:
         conn.executescript(
             """
@@ -166,15 +180,15 @@ def init_db() -> None:
                 postal_codes TEXT NOT NULL,
                 status TEXT NOT NULL,
                 cause TEXT NOT NULL,
-                affected_customers TEXT NOT NULL,
+                affected_customers INTEGER NOT NULL,
                 started_at TEXT NOT NULL,
                 estimated_resolution TEXT
             );
             CREATE TABLE IF NOT EXISTS slots (
                 slot_id TEXT PRIMARY KEY,
                 postal_codes TEXT NOT NULL,
-                start TEXT NOT NULL,
-                end TEXT NOT NULL,
+                "start" TEXT NOT NULL,
+                "end" TEXT NOT NULL,
                 available INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS reasons (

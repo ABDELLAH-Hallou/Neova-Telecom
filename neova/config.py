@@ -1,48 +1,64 @@
-"""Central configuration and environment handling."""
+"""Central configuration.
+
+All settings are read lazily at call time so foundation-only operations
+(health, fixture seed, offline tests) work without environment variables.
+Future model operations must request credentials explicitly; errors name
+the missing variable, never its value.
+"""
 
 import os
 from typing import Optional
 
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_DATABASE_URL = "sqlite:///./neova.db"
 
-def _require_env(name: str) -> str:
-    """Return env var or raise with redacted placeholder."""
+CLOCK_MODES = ("live", "frozen")
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required configuration is missing or invalid."""
+
+
+def _get_env(name: str) -> Optional[str]:
     value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value if value else None
+
+
+def _require(name: str, purpose: str) -> str:
+    value = _get_env(name)
+    if value is None:
+        raise ConfigurationError(
+            f"Missing required environment variable {name} ({purpose})."
+        )
     return value
 
 
-def _optional_env(name: str) -> Optional[str]:
-    """Return env var or None."""
-    return os.environ.get(name)
+def get_openrouter_base_url() -> str:
+    return _get_env("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE_URL
 
 
-# OpenRouter
-OPENROUTER_API_KEY: str = _require_env("OPENROUTER_API_KEY")
-OPENROUTER_BASE_URL: str = _optional_env("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+def require_openrouter_api_key() -> str:
+    """Return the OpenRouter key; fail closed with a sanitized error."""
+    return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")
 
-# Models
-CHAT_MODEL: str = _require_env("CHAT_MODEL")
-CHAT_FALLBACK_MODEL: str = _require_env("CHAT_FALLBACK_MODEL")
-EMBEDDING_MODEL: str = _require_env("EMBEDDING_MODEL")
 
-# FastAPI
-API_BASE_URL: str = _optional_env("API_BASE_URL") or "http://127.0.0.1:8000"
+def get_api_base_url() -> str:
+    return _get_env("API_BASE_URL") or DEFAULT_API_BASE_URL
 
-# Langfuse (bonus)
-LANGFUSE_PUBLIC_KEY: Optional[str] = _optional_env("LANGFUSE_PUBLIC_KEY")
-LANGFUSE_SECRET_KEY: Optional[str] = _optional_env("LANGFUSE_SECRET_KEY")
-LANGFUSE_HOST: str = _optional_env("LANGFUSE_HOST") or "https://cloud.langfuse.com"
 
-# Database
 def get_database_url() -> str:
-    """Return DATABASE_URL from env."""
-    return _optional_env("DATABASE_URL") or "sqlite:///./neova.db"
+    """SQLite database path; tests override it with a temporary path."""
+    return _get_env("DATABASE_URL") or DEFAULT_DATABASE_URL
 
 
-# Clock mode
-CLOCK_MODE: str = _optional_env("CLOCK_MODE") or "live"
-DEMO_TIMESTAMP: Optional[str] = _optional_env("DEMO_TIMESTAMP")
+def get_clock_mode() -> str:
+    """Return the clock mode: ``live`` (default) or ``frozen``."""
+    mode = (_get_env("CLOCK_MODE") or "live").strip().lower()
+    if mode not in CLOCK_MODES:
+        raise ConfigurationError("Invalid CLOCK_MODE: expected live or frozen.")
+    return mode
 
-# Demo isolation (internal, not user-typed)
-DEMO_SESSION_SECRET: str = _require_env("DEMO_SESSION_SECRET")
+
+def get_demo_timestamp() -> Optional[str]:
+    return _get_env("DEMO_TIMESTAMP")

@@ -1,44 +1,52 @@
-"""Demo session management: opaque tokens bound to fixture customers."""
+"""Process-local demo sessions, not identity verification.
 
+Tokens are random bearer values; only their hashes are stored server-side.
+They expire when the process exits. No customer details are exposed by the
+foundation routes, and a typed customer ID is never a credential.
+"""
+
+import hashlib
 import secrets
-from typing import Optional
+from functools import lru_cache
 
-from .config import DEMO_SESSION_SECRET
+from .db import load_fixture
 
 
-# Fixture customers available for demo isolation
-FIXTURE_CUSTOMERS = [
-    "NEO-88213",
-    "NEO-10467",
-    "NEO-53190",
-    "NEO-27604",
-    "NEO-71925",
-    "NEO-40318",
-]
+@lru_cache(maxsize=1)
+def fixture_customers() -> tuple[str, ...]:
+    return tuple(c["customer_id"] for c in load_fixture()["customers"])
+
+
+class SessionStore:
+    def __init__(self) -> None:
+        self._bindings: dict[str, str] = {}
+
+    def issue(self, customer_id: str) -> str:
+        if customer_id not in fixture_customers():
+            raise ValueError("Unknown fixture customer")
+        token = secrets.token_urlsafe(32)
+        self._bindings[hashlib.sha256(token.encode("ascii")).hexdigest()] = customer_id
+        return token
+
+    def validate(self, token: str) -> str | None:
+        if not isinstance(token, str):
+            return None
+        return self._bindings.get(hashlib.sha256(token.encode("utf-8")).hexdigest())
+
+    def is_for_customer(self, token: str, customer_id: str) -> bool:
+        return self.validate(token) == customer_id
+
+
+_sessions = SessionStore()
 
 
 def issue_session(customer_id: str) -> str:
-    """Issue an opaque session token bound to a fixture customer."""
-    if customer_id not in FIXTURE_CUSTOMERS:
-        raise ValueError(f"Unknown fixture customer: {customer_id}")
-    payload = f"{DEMO_SESSION_SECRET}|{customer_id}|{secrets.token_hex(16)}"
-    return payload
+    return _sessions.issue(customer_id)
 
 
-def validate_session(token: str) -> Optional[str]:
-    """Validate session token and return bound customer_id, or None."""
-    if not token.startswith(f"{DEMO_SESSION_SECRET}|"):
-        return None
-    parts = token.split("|")
-    if len(parts) != 3:
-        return None
-    _, customer_id, _ = parts
-    if customer_id not in FIXTURE_CUSTOMERS:
-        return None
-    return customer_id
+def validate_session(token: str) -> str | None:
+    return _sessions.validate(token)
 
 
 def is_session_for_customer(token: str, customer_id: str) -> bool:
-    """Check if token is bound to the given customer_id."""
-    bound = validate_session(token)
-    return bound == customer_id
+    return _sessions.is_for_customer(token, customer_id)
