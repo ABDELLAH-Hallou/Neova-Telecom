@@ -9,10 +9,6 @@ the missing variable, never its value.
 import os
 from typing import Optional
 
-DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_DATABASE_URL = "sqlite:///./neova.db"
-
 CLOCK_MODES = ("live", "frozen")
 
 
@@ -34,22 +30,31 @@ def _require(name: str, purpose: str) -> str:
     return value
 
 
+
+
 def get_openrouter_base_url() -> str:
-    return _get_env("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE_URL
+    return _require(
+        "OPENROUTER_BASE_URL",
+        "OpenRouter client configuration",
+    )
 
 
 def require_openrouter_api_key() -> str:
     """Return the OpenRouter key; fail closed with a sanitized error."""
     return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")
 
-
 def get_api_base_url() -> str:
-    return _get_env("API_BASE_URL") or DEFAULT_API_BASE_URL
+    return _require(
+        "API_BASE_URL",
+        "FastAPI service configuration",
+    )
 
 
 def get_database_url() -> str:
-    """SQLite database path; tests override it with a temporary path."""
-    return _get_env("DATABASE_URL") or DEFAULT_DATABASE_URL
+    return _require(
+        "DATABASE_URL",
+        "SQLite database configuration",
+    )
 
 
 def get_clock_mode() -> str:

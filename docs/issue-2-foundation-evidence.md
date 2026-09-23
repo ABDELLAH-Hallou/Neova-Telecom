@@ -9,6 +9,9 @@ This note records observed checks, not evidence for a working customer agent.
 - Locked install: `uv sync --locked --extra dev` → 57 packages resolved, 55 audited; no lock mismatch.
 - Locked compile: `uv run --locked --extra dev python -m compileall -q main.py neova tests` → exit 0.
 - Complete suite after the launcher-output test: `uv run --locked --extra dev python -m pytest tests/test_foundation.py -v` → **9 passed**, one upstream Starlette/AnyIO deprecation warning.
+- After adding the SQLite manager singleton and concurrent-init tests, the same locked suite → **11 passed**, one upstream Starlette/AnyIO deprecation warning. The two targeted manager tests → **2 passed**. Compile and fixture/corpus diff checks still exit 0.
+- The manager singleton has since been replaced by a connection per issued demo session; initialization still uses a short-lived connection. Targeted tests for per-session reuse, isolation and serialized concurrent access passed **3/3**. Application lifespan closes cached connections.
+- After the session-scoped connection change, the complete locked foundation suite → **12 passed**, one upstream Starlette/AnyIO deprecation warning. Compilation and fixture/corpus diff checks exited 0.
 - Single-process smoke on Windows: launched `uv run --locked python main.py` with `DATABASE_URL` pointed to a temporary SQLite path and no `OPENROUTER_API_KEY`; `GET http://127.0.0.1:8000/health` → HTTP 200 with `status=ok`, `mode=foundation`, `db_ready=true`, `fixture_customers=6`. The temporary SQLite file existed and the server was stopped.
 - `git diff --exit-code -- data/neova_data.json corpus/` → exit 0; `git diff --check` → exit 0 (Git printed Windows LF/CRLF conversion notices, not patch errors).
 

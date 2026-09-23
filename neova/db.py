@@ -3,10 +3,14 @@
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from threading import Lock
+from typing import Any, Iterator
 
 from .config import get_database_url
+from .session import validate_session
+from .utils import fixture_hash, load_fixture
 
 
 def _db_path() -> str:
@@ -17,18 +21,74 @@ def _db_path() -> str:
     raise RuntimeError("Only SQLite DATABASE_URL supported in foundation")
 
 
+_init_lock = Lock()
+_session_lock = Lock()
+
+
+class _SessionConnection:
+    def __init__(self, path: Path) -> None:
+        # FastAPI requests may run on different worker threads. All access to
+        # this connection is serialized by the per-session lock below.
+        self.connection = sqlite3.connect(path, check_same_thread=False)
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.lock = Lock()
+
+
+_session_connections: dict[tuple[Path, str], _SessionConnection] = {}
+
+
 def connect(db_path: str | None = None) -> sqlite3.Connection:
-    """Open a SQLite connection with foreign keys enforced."""
+    """Open a short-lived connection for initialization or maintenance."""
     conn = sqlite3.connect(db_path if db_path is not None else _db_path())
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def _seed_hash() -> str:
-    """Return SHA-256 hex digest of the raw fixture JSON."""
-    path = Path(__file__).parent.parent / "data" / "neova_data.json"
-    data = path.read_bytes()
-    return hashlib.sha256(data).hexdigest()
+def _session_key(token: str) -> tuple[Path, str]:
+    if validate_session(token) is None:
+        raise ValueError("Invalid demo session")
+    return (Path(_db_path()).resolve(), hashlib.sha256(token.encode("utf-8")).hexdigest())
+
+
+@contextmanager
+def session_connection(token: str) -> Iterator[sqlite3.Connection]:
+    """Reuse exactly one connection per issued session and database file.
+
+    Hold a per-session lock for the entire operation; commit on success and
+    roll back on error. Never share a live connection between sessions.
+    This is a foundation primitive, not a customer-read or booking endpoint.
+    """
+    key = _session_key(token)
+    with _session_lock:
+        entry = _session_connections.get(key)
+        if entry is None:
+            entry = _SessionConnection(key[0])
+            _session_connections[key] = entry
+        entry.lock.acquire()
+    try:
+        with entry.connection:
+            yield entry.connection
+    finally:
+        entry.lock.release()
+
+
+def release_session_connection(token: str) -> None:
+    """Close a session's connection when its demo session ends."""
+    key = _session_key(token)
+    with _session_lock:
+        entry = _session_connections.pop(key, None)
+        if entry is not None:
+            with entry.lock:
+                entry.connection.close()
+
+
+def close_session_connections() -> None:
+    """Close all cached connections on application shutdown."""
+    with _session_lock:
+        for entry in _session_connections.values():
+            with entry.lock:
+                entry.connection.close()
+        _session_connections.clear()
 
 
 def _seed_customers(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
@@ -154,9 +214,13 @@ def _seed_categories(conn: sqlite3.Connection, data: dict[str, Any]) -> int:
 
 def init_db() -> None:
     """Create schema and seed fixture if empty; idempotent on restart."""
-    db_path = _db_path()
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = connect(db_path)
+    with _init_lock:
+        _initialize(Path(_db_path()).resolve())
+
+
+def _initialize(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(str(path))
     try:
         conn.executescript(
             """
@@ -231,7 +295,7 @@ def init_db() -> None:
         existing_hash = conn.execute(
             "SELECT value FROM _meta WHERE key = 'seed_hash'"
         ).fetchone()
-        new_hash = _seed_hash()
+        new_hash = fixture_hash()
         if existing_hash is None:
             conn.execute(
                 "INSERT INTO _meta (key, value) VALUES ('seed_hash', ?)", (new_hash,)
@@ -248,12 +312,6 @@ def init_db() -> None:
         raise
     finally:
         conn.close()
-
-
-def load_fixture() -> dict[str, Any]:
-    """Load the fixture JSON for tests; does not touch the DB."""
-    path = Path(__file__).parent.parent / "data" / "neova_data.json"
-    return json.loads(path.read_text())
 
 
 def get_customer_by_id(conn: sqlite3.Connection, customer_id: str) -> dict[str, Any] | None:

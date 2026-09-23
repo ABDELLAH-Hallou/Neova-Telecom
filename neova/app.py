@@ -5,19 +5,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .db import init_db
+from .db import close_session_connections, init_db
 from .graph import compiled
 from .session import fixture_customers, issue_session
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    init_db()  # startup
     app.state.db_ready = True
     try:
-        yield
+        yield # running
     finally:
-        app.state.db_ready = False
+        close_session_connections()
+        app.state.db_ready = False # shutdown
 
 
 app = FastAPI(lifespan=lifespan, title="Neova Foundation API")
@@ -41,7 +42,7 @@ class DemoSessionRequest(BaseModel):
     customer_id: str
 
 
-@app.post("/foundation/sessions")
+@app.post("/demo/sessions")
 def create_demo_session(request: DemoSessionRequest):
     """Local fixture selection only; NOT authentication or authorization."""
     try:

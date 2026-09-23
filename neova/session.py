@@ -9,7 +9,7 @@ import hashlib
 import secrets
 from functools import lru_cache
 
-from .db import load_fixture
+from .utils import load_fixture
 
 
 @lru_cache(maxsize=1)

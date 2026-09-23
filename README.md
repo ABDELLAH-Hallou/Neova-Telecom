@@ -3,7 +3,7 @@
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). From the repository root:
 
 ```sh
-uv run --locked python main.py
+uv run --locked --env-file .env -- python main.py
 ```
 
 The server binds **127.0.0.1:8000** in one process. Visit
@@ -15,7 +15,7 @@ the app does not load `.env` automatically. Configure settings as process
 environment variables when needed; never commit credentials.
 
 The bounded graph entry `POST /foundation/graph` returns only a foundation
-status, **not** a customer answer. `POST /foundation/sessions` with JSON
+status, **not** a customer answer. `POST /demo/sessions` with JSON
 `{"customer_id":"NEO-88213"}` issues a random process-local fixture token;
 selection of a customer ID is **not identity verification**. Tokens expire
 when the server exits, and no private customer-data endpoints are exposed.
@@ -35,7 +35,9 @@ uv run --locked --extra dev python -m pytest tests/test_foundation.py -v
 ```
 
 Design: `main.py` runs FastAPI and the bounded LangGraph in the same
-process. `neova/db.py` seeds SQLite once and leaves later writes intact;
+process. `neova/db.py` reuses one SQLite connection per issued demo session,
+serializes access to it across request threads, closes it on shutdown, and
+seeds once without overwriting later writes;
 `neova/clock.py` enforces aware `slot.start > now`; `neova/session.py`
 uses random server-side token bindings for demo isolation only. See
 `docs/issue-2-foundation-evidence.md` for verified checks and limitations.
