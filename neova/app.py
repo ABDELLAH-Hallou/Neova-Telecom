@@ -1,12 +1,24 @@
 """Local FastAPI application hosting the foundation graph and SQLite seed."""
 
 from contextlib import asynccontextmanager
-from typing import Literal
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 
+from . import customer_api, db
 from .config import ConfigurationError
+from .dto import (
+    AppointmentRead,
+    AppointmentRequest,
+    AppointmentResult,
+    ChatRequest,
+    CustomerSummary,
+    DemoSessionRequest,
+    GraphRequest,
+    HandoffRequest,
+    HandoffResult,
+    IncidentRead,
+    SlotRead,
+)
 from .db import close_session_connections, init_db
 from .graph import compiled
 from .models import chat_model
@@ -27,6 +39,60 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="Neova Foundation API")
 
 
+def demo_session(x_demo_session: str | None = Header(default=None, alias="X-Demo-Session")) -> tuple[str, str]:
+    return x_demo_session, customer_api.bound_customer(x_demo_session)
+
+
+@app.get("/customers/{customer_id}/summary", response_model=CustomerSummary)
+def customer_summary(customer_id: str, session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    customer_api.require_customer(bound_id, customer_id)
+    return customer_api.summary(token, bound_id)
+
+
+@app.get("/incidents", response_model=list[IncidentRead])
+def incidents(session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    return customer_api.incidents(token, bound_id)
+
+
+@app.get("/slots", response_model=list[SlotRead])
+def slots(customer_id: str = Query(...), session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    customer_api.require_customer(bound_id, customer_id)
+    return customer_api.slots(token, bound_id)
+
+
+@app.post("/appointments", response_model=AppointmentResult, status_code=201)
+def book_appointment(request: AppointmentRequest, session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    customer_api.require_customer(bound_id, request.customer_id)
+    try:
+        return db.book_appointment(token, bound_id, request.slot_id, request.reason_id,
+                                   request.confirmation_key)
+    except db.BookingFailure as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+
+
+@app.get("/appointments/by-key/{key}", response_model=AppointmentRead)
+def appointment_by_key(key: str = Path(min_length=1, max_length=128),
+                       session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    return customer_api.appointment(token, bound_id, key)
+
+
+@app.post("/handoffs", response_model=HandoffResult, status_code=201)
+def create_handoff(request: HandoffRequest, session: tuple[str, str] = Depends(demo_session)):
+    token, bound_id = session
+    if request.customer_reference is not None:
+        customer_api.require_customer(bound_id, request.customer_reference)
+    try:
+        return db.save_handoff(token, bound_id, request.category_id,
+                               request.summary, request.urgency)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Unknown handoff category") from None
+
+
 @app.get("/health")
 def health():
     return {
@@ -35,19 +101,6 @@ def health():
         "db_ready": app.state.db_ready,
         "fixture_customers": len(fixture_customers()),
     }
-
-
-class GraphRequest(BaseModel):
-    prompt: str
-
-
-class ChatRequest(BaseModel):
-    prompt: str
-    provider: Literal["openrouter", "openai"]
-
-
-class DemoSessionRequest(BaseModel):
-    customer_id: str
 
 
 @app.post("/demo/sessions")
