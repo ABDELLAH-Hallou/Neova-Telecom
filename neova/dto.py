@@ -7,7 +7,7 @@ values; prompts and other free text are bounded.
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BeforeValidator, BaseModel, ConfigDict, Field, field_validator
 
 MAX_IDENTIFIER_LENGTH = 64
 MAX_CONFIRMATION_KEY_LENGTH = 128
@@ -17,6 +17,8 @@ MAX_PROMPT_LENGTH = 5000
 
 def _reject_blank_or_padded(value: str) -> str:
     """Reject blank values and values with leading/trailing whitespace."""
+    if not isinstance(value, str):
+        return value
     if not value.strip():
         raise ValueError("must not be blank")
     if value != value.strip():
@@ -26,14 +28,14 @@ def _reject_blank_or_padded(value: str) -> str:
 
 Identifier = Annotated[
     str,
+    BeforeValidator(_reject_blank_or_padded),
     Field(min_length=1, max_length=MAX_IDENTIFIER_LENGTH),
-    AfterValidator(_reject_blank_or_padded),
 ]
 
 ConfirmationKey = Annotated[
     str,
+    BeforeValidator(_reject_blank_or_padded),
     Field(min_length=1, max_length=MAX_CONFIRMATION_KEY_LENGTH),
-    AfterValidator(_reject_blank_or_padded),
 ]
 
 Prompt = Annotated[str, Field(min_length=1, max_length=MAX_PROMPT_LENGTH)]
