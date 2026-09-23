@@ -1,8 +1,8 @@
-# Néova Foundation — Issue #2
+# Néova Local API — Issues #2–#3
 
-Foundation for the Néova customer-relations agent.
+Local foundation and fixture-backed customer API for the Néova customer-relations agent.
 
-This version provides the local API, SQLite persistence, demo sessions, a configurable clock and a minimal LangGraph. It does not provide customer answers yet.
+This version provides SQLite persistence, demo sessions, a configurable clock, scoped reads, atomic booking and handoff storage, and a minimal LangGraph. It does not provide customer conversations yet.
 
 ## Run the application
 
@@ -53,6 +53,12 @@ Stop the server with `Ctrl+C`.
 | `POST` | `/demo/sessions` | Create a local session for a fixture customer |
 | `POST` | `/foundation/graph` | Exercise the placeholder LangGraph |
 | `POST` | `/models/chat` | Call either configured chat provider |
+| `GET` | `/customers/{id}/summary` | Session customer's minimal account summary |
+| `GET` | `/incidents` | Linked and area-only incidents (scope clearly labeled) |
+| `GET` | `/slots?customer_id=...` | Future, available slots covering the session customer's postcode |
+| `POST` | `/appointments` | Atomically save a booking with an idempotency key |
+| `GET` | `/appointments/by-key/{key}` | Look up only the session customer's saved booking |
+| `POST` | `/handoffs` | Save a minimal human-handoff record and return its ID |
 
 To call a model, POST `{"provider":"openrouter","prompt":"Bonjour"}` or `{"provider":"openai","prompt":"Bonjour"}` to `/models/chat`.
 
@@ -92,6 +98,23 @@ The server returns a random process-local token:
 
 Selecting a fixture customer is not real authentication. The token only keeps local demo sessions separate. Tokens expire when the application stops.
 
+All six customer API routes require `X-Demo-Session: <session_token>`. A typed customer ID alone cannot read or write account data. For example, after creating a session, use its token in these requests:
+
+```bash
+curl -H "X-Demo-Session: $TOKEN" http://127.0.0.1:8000/customers/NEO-88213/summary
+curl -H "X-Demo-Session: $TOKEN" http://127.0.0.1:8000/incidents
+curl -H "X-Demo-Session: $TOKEN" 'http://127.0.0.1:8000/slots?customer_id=NEO-88213'
+curl -X POST -H "X-Demo-Session: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"customer_id":"NEO-88213","slot_id":"SLOT-7A31","reason_id":"no_internet","confirmation_key":"demo-claim-1"}' \
+  http://127.0.0.1:8000/appointments
+curl -H "X-Demo-Session: $TOKEN" http://127.0.0.1:8000/appointments/by-key/demo-claim-1
+curl -X POST -H "X-Demo-Session: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"category_id":"technical","summary":"Diagnostic nécessaire","urgency":"normal"}' \
+  http://127.0.0.1:8000/handoffs
+```
+
+Booking the supplied dates requires the **explicit frozen demo clock** below. The API returns a saved appointment ID on success; replaying the same key for the same customer/slot/reason returns that ID. An invalid, unavailable, past, cross-customer or conflicting request never confirms a booking. Explicit **user** confirmation before making this API call belongs to the later conversation graph. Handoff IDs represent stored local records, not an accepted advisor queue. `GET /incidents` labels postcode-only coverage `area_only`, never as proof a customer is affected.
+
 Test the placeholder graph:
 
 ```bash
@@ -129,9 +152,9 @@ The application runs in one local process.
 
 `neova/db.py`:
 
-- Seeds SQLite from the supplied JSON.
+- Seeds SQLite from the supplied JSON and persists bookings and handoffs.
 - Does not modify the source fixture.
-- Preserves appointments and handoffs after restart.
+- Preserves appointments and handoffs after restart; one slot cannot be booked twice.
 - Reuses one locked SQLite connection for each active demo session.
 - Closes cached connections during application shutdown.
 - Uses temporary connections for initialization and maintenance.
@@ -156,7 +179,7 @@ CLOCK_MODE=frozen
 DEMO_TIMESTAMP=2026-08-26T12:00:00+02:00
 ```
 
-The booking implementation must later use this rule:
+The booking implementation uses this rule:
 
 ```text
 slot.start > current time
@@ -166,17 +189,10 @@ Timestamps without timezone information are rejected for booking validation.
 
 ## Tests
 
-Run the offline foundation tests:
+Run the offline tests:
 
 ```bash
-uv run --locked --extra dev python -m pytest tests/test_foundation.py -v
-```
-
-Current result:
-
-```text
-12 passed
-1 upstream Starlette/AnyIO deprecation warning
+uv run --locked --extra dev python -m pytest tests/test_customer_api.py tests/test_foundation.py tests/test_models.py -q
 ```
 
 The tests cover:
@@ -191,6 +207,7 @@ The tests cover:
 - FastAPI lifespan
 - Health and graph endpoints
 - Secret-safe configuration errors
+- Scoped customer reads, transactional booking, replay/concurrent claims and durable handoffs
 
 The tests use temporary databases and make no network or OpenRouter requests.
 
@@ -198,10 +215,8 @@ The tests use temporary databases and make no network or OpenRouter requests.
 
 This foundation does not yet implement:
 
-- Customer-data endpoints
-- Technician appointment booking
 - Knowledge-base retrieval
-- Human handoff
+- Conversational confirmation and human queue integration
 - Model-backed customer agent (the chat endpoint is a direct model call)
 - Conversation evaluation
 
