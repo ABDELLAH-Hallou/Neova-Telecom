@@ -31,10 +31,13 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --locked
+        run: uv sync --locked --extra dev
 
       - name: Compile Python source
-        run: uv run --locked python -m compileall -q main.py
+        run: uv run --locked --extra dev python -m compileall -q main.py neova tests
 
-      - name: Run smoke test
-        run: uv run --locked python main.py
+      - name: Run foundation tests
+        run: uv run --locked --extra dev python -m pytest tests/test_foundation.py -q
+
+      - name: Check supplied data is unchanged
+        run: git diff --exit-code -- data/neova_data.json corpus/

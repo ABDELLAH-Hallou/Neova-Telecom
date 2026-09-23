@@ -15,3 +15,7 @@ venv/
 *.swp
 .cache/
 .opencode/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
