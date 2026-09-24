@@ -37,7 +37,7 @@ jobs:
         run: uv run --locked --extra dev python -m compileall -q main.py neova tests
 
       - name: Run offline tests
-        run: uv run --locked --extra dev python -m pytest tests/test_dto.py tests/test_customer_api.py tests/test_foundation.py tests/test_models.py -q
+        run: uv run --locked --extra dev python -m pytest tests/test_dto.py tests/test_customer_api.py tests/test_foundation.py tests/test_models.py tests/test_retrieval.py tests/test_pdf_extractors.py -q
 
       - name: Check supplied data is unchanged
         run: git diff --exit-code -- data/neova_data.json corpus/
