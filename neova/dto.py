@@ -120,5 +120,47 @@ class ChatRequest(RequestModel):
     provider: Literal["openrouter", "openai"]
 
 
+class ChatMessage(RequestModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=MAX_PROMPT_LENGTH)
+
+
+class AgentChatRequest(RequestModel):
+    message: Prompt
+    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+
+
+class Citation(BaseModel):
+    source_id: str
+    source_path: str
+    page_start: int
+    page_end: int
+    section: str
+
+
+class GateFlag(BaseModel):
+    code: str
+    message: str
+
+
+class PendingBookingView(BaseModel):
+    customer_id: str
+    slot_id: str | None
+    slot_label: str | None
+    reason_id: str | None
+    confirmation_pending: bool
+
+
+class AgentChatResult(BaseModel):
+    reply: str
+    route: str
+    tools_called: list[str]
+    pending_booking: PendingBookingView | None
+    handoff_id: int | None
+    citations: list[Citation]
+    gate_flags: list[GateFlag]
+    degraded: list[str]
+
+
 class DemoSessionRequest(RequestModel):
     customer_id: Identifier
