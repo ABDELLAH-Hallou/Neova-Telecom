@@ -128,6 +128,13 @@ curl -X POST http://127.0.0.1:8000/agent/chat \
 
 The reply includes the French answer, the chosen route, the tools called, the pending-booking confirmation state, citations and handoff reference when a handoff was stored. Without `X-Demo-Session`, the agent answers from the public corpus and offers a generic human route without any private data.
 
+## Conversation agent internals
+
+- **Routing order (per turn):** (1) deterministic prompt-injection check on the raw message — before any model call; (2) with a pending booking, exact known continuations (`oui`, `non`, `ok`, `confirmer`, `annuler`) and exact code phrases route straight to the booking flow without a classifier call — continuations only re-ask, they never confirm; (3) otherwise one cheap OpenRouter classification call (`CLASSIFIER_MODEL`, temperature 0, max_tokens 150, reasoning disabled, strict `json_schema` with `additionalProperties: false` and `provider.require_parameters: true`); (4) `out_of_scope` and `ambiguous` verdicts are protected — a pending booking never overrides them.
+- **Confirmation:** the agent proposes the exact Europe/Paris slot and reason with a one-time code: reply exactly `CONFIRMER RDV <code>` to book or `ANNULER RDV <code>` to cancel. Codes are random per proposal, expire after 10 minutes (wall-clock independent of the frozen demo clock), and a stale code can never book. Bare "oui" books nothing.
+- **Prompts** live in `neova/prompt/` (`classifier.md`, `answer.md`) — versioned Markdown, no prompt text in code.
+- **Degradation:** missing `CLASSIFIER_MODEL`, a network error or a schema violation falls back to the deterministic keyword router and is reported as `classification.degraded: true` in the trace; `classification.source` is `model`, `keywords` or `skipped`.
+
 ## Architecture
 
 ```text

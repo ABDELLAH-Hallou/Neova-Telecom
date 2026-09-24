@@ -44,6 +44,11 @@ def get_embedding_model() -> str:
     return _require("EMBEDDING_MODEL", "OpenRouter embeddings via retrieval")
 
 
+def get_classifier_model() -> str:
+    """Return the configured OpenRouter intent-classification model name."""
+    return _require("CLASSIFIER_MODEL", "OpenRouter intent classification")
+
+
 def require_openrouter_api_key() -> str:
     """Return the OpenRouter key; fail closed with a sanitized error."""
     return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")

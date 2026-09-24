@@ -147,9 +147,28 @@ class PendingBookingView(BaseModel):
     confirmation_pending: bool
 
 
+class ClassificationTrace(BaseModel):
+    """Trace of the routing decision behind the turn.
+
+    ``source``: ``model`` = the semantic classifier decided, ``keywords``
+    = the deterministic keyword router (unconfigured or degraded
+    classifier), ``skipped`` = a deterministic pre-check decided before
+    any model call (injection guard, exact booking continuation).
+    """
+
+    intent: str | None = None
+    out_of_scope: bool = False
+    ambiguous: bool = False
+    prompt_injection: bool = False
+    reason_candidate: str | None = None
+    source: Literal["model", "keywords", "skipped"]
+    degraded: bool = False
+
+
 class AgentChatResult(BaseModel):
     reply: str
     route: str
+    classification: ClassificationTrace
     tools_called: list[str]
     pending_booking: PendingBookingView | None
     handoff_id: int | None

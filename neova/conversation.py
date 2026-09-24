@@ -18,12 +18,65 @@ from __future__ import annotations
 
 import hashlib
 import re
+import secrets
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 
 from . import clock
+
+# A code is scoped to one offered pair and expires even with a frozen demo clock.
+CONFIRMATION_TTL_SECONDS = 10 * 60
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _new_code(previous: str | None) -> str:
+    code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(4))
+    while code == previous:
+        code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(4))
+    return code
+
+
+def is_confirmation(message: str, code: str | None) -> bool:
+    """True only when the whole user message is the exact confirm phrase."""
+    return bool(code) and normalize(message) == f"confirmer rdv {code}".lower()
+
+
+def is_cancellation(message: str, code: str | None) -> bool:
+    return bool(code) and normalize(message) == f"annuler rdv {code}".lower()
+
+
+def is_code_attempt(message: str) -> bool:
+    return bool(re.fullmatch(r"(?:confirmer|annuler) rdv [a-z2-9]{4}", normalize(message)))
+
+
+BOOKING_CONTINUATIONS = frozenset({"oui", "non", "ok", "confirmer", "annuler"})
+
+
+def is_booking_continuation(message: str) -> bool:
+    """Only these short replies continue; none authorizes a booking."""
+    return normalize(message) in BOOKING_CONTINUATIONS
+
+
+# Code-side second layer of prompt-injection defence. The classifier flags
+# injection too; these deterministic patterns enforce the boundary even if
+# the classifier is degraded or misses the attempt.
+_INJECTION_PATTERNS = (
+    "ignore previous", "ignore all previous", "ignore les instructions",
+    "ignore toutes les instructions", "oublie tes instructions",
+    "reveal your prompt", "reveal your instructions",
+    "montre ton prompt", "montre moi ton prompt", "system prompt",
+    "tu es maintenant", "you are now", "act as", "comme si tu eta",
+    "developer mode", "mode developpeur", "jailbreak",
+    "contourne les restrictions", "bypass",
+)
+
+
+def looks_like_injection(message: str) -> bool:
+    text = normalize(message)
+    return any(pattern in text for pattern in _INJECTION_PATTERNS)
 
 
 def normalize(text: str) -> str:
@@ -40,13 +93,17 @@ def normalize(text: str) -> str:
 @dataclass
 class PendingBooking:
     """The exact booking offer kept across turns; `proposed` means the
-    exact slot+reason pair was shown and an explicit user yes is awaited."""
+    exact slot+reason pair was shown and its time-limited code is awaited."""
 
     customer_id: str
     slot_id: str | None = None
     slot_label: str | None = None
     reason_id: str | None = None
     proposed: bool = False
+    code: str | None = None
+    proposed_at: float | None = None
+    previous_code: str | None = None
+    expired: bool = False
 
     @property
     def complete(self) -> bool:
@@ -54,7 +111,9 @@ class PendingBooking:
 
     @property
     def awaiting_confirmation(self) -> bool:
-        return self.proposed and self.complete
+        return (self.proposed and self.complete and self.code is not None
+                and self.proposed_at is not None
+                and time.monotonic() - self.proposed_at < CONFIRMATION_TTL_SECONDS)
 
 
 class ConversationStore:
@@ -64,6 +123,7 @@ class ConversationStore:
         self._lock = threading.Lock()
         self._pending: dict[str, PendingBooking] = {}
         self._offered: dict[str, list[dict]] = {}
+        self._last_code: dict[str, str] = {}
 
     @staticmethod
     def _key(token: str) -> str:
@@ -71,7 +131,15 @@ class ConversationStore:
 
     def pending(self, token: str) -> PendingBooking | None:
         with self._lock:
-            return self._pending.get(self._key(token))
+            key = self._key(token)
+            booking = self._pending.get(key)
+            if (booking and booking.proposed and booking.proposed_at is not None
+                    and time.monotonic() - booking.proposed_at >= CONFIRMATION_TTL_SECONDS):
+                booking = replace(booking, proposed=False, code=None,
+                                  proposed_at=None, expired=True,
+                                  previous_code=booking.code)
+                self._pending[key] = booking
+            return booking
 
     def start(self, token: str, customer_id: str) -> PendingBooking:
         with self._lock:
@@ -102,7 +170,8 @@ class ConversationStore:
             if reason_id is not None:
                 fields["reason_id"] = reason_id
             if changed:
-                fields["proposed"] = False
+                fields.update(proposed=False, code=None, proposed_at=None,
+                              expired=False, previous_code=booking.code or booking.previous_code)
             booking = replace(booking, **fields)
             self._pending[self._key(token)] = booking
             return booking
@@ -110,10 +179,14 @@ class ConversationStore:
     def mark_proposed(self, token: str) -> PendingBooking | None:
         with self._lock:
             booking = self._pending.get(self._key(token))
-            if booking is None:
+            if booking is None or not booking.complete:
                 return None
-            booking = replace(booking, proposed=True)
-            self._pending[self._key(token)] = booking
+            key = self._key(token)
+            code = _new_code(self._last_code.get(key) or booking.code or booking.previous_code)
+            booking = replace(booking, proposed=True, proposed_at=time.monotonic(),
+                              code=code, expired=False)
+            self._last_code[key] = code
+            self._pending[key] = booking
             return booking
 
     def set_offered(self, token: str, offered: list[dict]) -> None:
@@ -134,6 +207,7 @@ class ConversationStore:
         with self._lock:
             self._pending.clear()
             self._offered.clear()
+            self._last_code.clear()
 
 
 _store = ConversationStore()
@@ -192,31 +266,20 @@ def pending_view(token: str | None) -> dict | None:
 
 # ---------------------------------------------------------------------------
 # Deterministic confirmation gate (user turns only, never model output)
+#
+# Stricter flow: a booking is armed ONLY by the exact code phrase shown in
+# the proposal (e.g. "CONFIRMER RDV 7K3P"), tied to the exact slot+reason
+# pair. Bare "oui" and every model-generated affirmative book nothing.
+# The phrases are matched case-insensitively after accent/punctuation
+# normalization; anything else re-asks.
 
 
-AFFIRMATIONS = (
-    "oui", "oui je confirme", "oui je valide", "oui c est bon", "oui d accord",
-    "oui parfait", "oui merci", "oui ca me va", "oui je le confirme",
-    "je confirme", "je confirme le rendez vous", "je confirme ce creneau",
-    "je confirme cette date", "je valide", "je valide le rendez vous",
-    "d accord", "c est bon", "ca marche", "ca me va", "parfait",
-    "parfait merci", "je veux bien", "ok", "okay", "confirme",
-)
-
-REFUSALS = (
-    "non", "non merci", "pas maintenant", "pas encore", "annuler", "annule",
-    "stop", "je ne veux pas", "non pas maintenant", "jamais",
-    "non je ne confirme pas", "aucun rendez vous",
-)
+def confirmation_phrase(code: str) -> str:
+    return f"CONFIRMER RDV {code}"
 
 
-def is_affirmation(message: str) -> bool:
-    """True only when the whole user message is an explicit affirmative."""
-    return normalize(message) in AFFIRMATIONS
-
-
-def is_refusal(message: str) -> bool:
-    return normalize(message) in REFUSALS
+def cancellation_phrase(code: str) -> str:
+    return f"ANNULER RDV {code}"
 
 
 def confirmation_key(customer_id: str, slot_id: str, reason_id: str) -> str:
@@ -342,8 +405,40 @@ ROUTE_KEYWORDS = (
 )
 
 
+def _sensitive_params(message: str) -> dict | None:
+    """Sensitive-topic parameters from the code-side table, or None."""
+    text = normalize(message)
+    for topic_id, label, urgency, keywords in SENSITIVE_TOPICS:
+        if any(normalize(keyword) in text for keyword in keywords):
+            return {"topic": topic_id, "topic_label": label,
+                    "urgency": urgency, "category": "other"}
+    return None
+
+
+_STATIC_HANDOFF = {
+    "billing_dispute": {"topic": "litige facturation",
+                        "topic_label": "litige de facturation",
+                        "urgency": "normal", "category": "billing_dispute"},
+    "termination": {"topic": "résiliation", "topic_label": "résiliation",
+                    "urgency": "normal", "category": "termination"},
+    "unsupported_mutation": {"topic": "modification de compte",
+                             "topic_label": "modification de compte",
+                             "urgency": "normal", "category": "other"},
+}
+
+
+def params_for_route(route: str, message: str) -> dict | None:
+    """Handoff parameters for a classifier-driven route (policy layer)."""
+    if route == "sensitive":
+        return _sensitive_params(message) or {
+            "topic": "autre", "topic_label": "demande sensible",
+            "urgency": "normal", "category": "other"}
+    return _STATIC_HANDOFF.get(route)
+
+
 def classify_request(message: str) -> tuple[str, dict | None]:
-    """Deterministic routing. Returns (route, handoff-parameters or None).
+    """Deterministic keyword fallback routing (used when the semantic
+    classifier is unconfigured or degraded).
 
     Sensitive topics win over everything: privacy rights, fraud, legal
     threats, death, protected/minor customers and distress go to an
@@ -351,27 +446,13 @@ def classify_request(message: str) -> tuple[str, dict | None]:
     mutations are handed off as well.
     """
     text = normalize(message)
-    for topic_id, label, urgency, keywords in SENSITIVE_TOPICS:
-        if any(normalize(keyword) in text for keyword in keywords):
-            return "sensitive", {
-                "topic": topic_id, "topic_label": label,
-                "urgency": urgency, "category": "other",
-            }
+    params = _sensitive_params(message)
+    if params is not None:
+        return "sensitive", params
     for route, keywords in ROUTE_KEYWORDS:
         if any(normalize(keyword) in text for keyword in keywords):
-            if route == "billing_dispute":
-                return route, {"topic": "litige facturation",
-                               "topic_label": "litige de facturation",
-                               "urgency": "normal",
-                               "category": "billing_dispute"}
-            if route == "termination":
-                return route, {"topic": "résiliation",
-                               "topic_label": "résiliation",
-                               "urgency": "normal", "category": "termination"}
-            if route == "unsupported_mutation":
-                return route, {"topic": "modification de compte",
-                               "topic_label": "modification de compte",
-                               "urgency": "normal", "category": "other"}
+            if route in _STATIC_HANDOFF:
+                return route, dict(_STATIC_HANDOFF[route])
             return route, None
     return "unsupported", None
 

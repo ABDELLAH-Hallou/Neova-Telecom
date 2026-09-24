@@ -1,5 +1,44 @@
 # Issue #5 / PR 4 — conversation graph report
 
+> **Addendum 3 (boundary ordering, strict schema, code expiry):**
+> - The deterministic injection check now runs **before** any model call; matched
+>   text is never sent to a provider, and the guard applies even when the classifier
+>   is unconfigured or degraded (`classification.source: "skipped"`).
+> - Booking continuation is narrowed: only the exact set `oui`/`non`/`ok`/
+>   `confirmer`/`annuler` and exact code phrases pre-route to the booking flow
+>   (before the classifier); they only re-ask for the code and never confirm.
+>   `out_of_scope` and `ambiguous` verdicts are protected — a pending booking can
+>   no longer override them (e.g. "football demain" while a booking is pending).
+> - The classifier call uses strict structured output: `response_format
+>   json_schema` with `strict: true`, `additionalProperties: false` (Pydantic
+>   schema, all fields required, extra="forbid", strict types) and
+>   `provider.require_parameters: true` via `extra_body`. Fenced/loose JSON is no
+>   longer parsed — schema or validation failures degrade visibly to the keyword
+>   router.
+> - Confirmation codes are now **one-time and expiring**: random per proposal
+>   (never reused, deterministic pair-digest removed), TTL 10 minutes measured
+>   with `time.monotonic()` (immune to the frozen demo clock), wrong/expired
+>   codes answered with an explicit expiry message and never a booking.
+> - Prompts moved to `neova/prompt/` (`classifier.md`, `answer.md`), loaded via
+>   `neova.prompt.load`; no prompt text remains in code.
+> - New `tests/test_classifier.py` asserts the exact OpenRouter request shape
+>   (strict schema, enums, require_parameters, temperature 0, max_tokens 150,
+>   reasoning disabled) and rejects loose/invalid outputs. Full suite: **128
+>   passed**, offline.
+
+> **Addendum 2 (semantic classifier + hardened boundaries):** routing, out-of-scope,
+> ambiguity and injection detection now run through one cheap OpenRouter call per
+> turn (`CLASSIFIER_MODEL`, temperature 0, max_tokens 150, reasoning disabled; see
+> `neova/classifier.py` and `neova/nodes/classify.py`). The classification output is
+> validated with Pydantic against fixed enums and then mapped through a deterministic
+> policy layer; any failure degrades visibly to the keyword router. Injection attempts
+> (classifier flag or code-side heuristic) stop in `injection_guard`: no tools, no
+> reads, no writes. The confirmation gate is now stricter: only the exact phrase
+> `CONFIRMER RDV <code>` (code derived deterministically from the exact pair) books;
+> `ANNULER RDV <code>` cancels; a bare "oui" books nothing. Reason extraction uses the
+> classifier candidate validated against the fixed enum, with keyword fallback.
+> 101 tests pass offline (classifier doubles only; no network calls in tests).
+
 > **Addendum (post-issue #5 cleanup):** `POST /foundation/graph`, its `GraphRequest`
 > DTO and the placeholder foundation graph have since been removed; the app is now
 > titled *Neova Telecom Customer Agent API* with `GET /health` returning

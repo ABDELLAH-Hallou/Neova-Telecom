@@ -28,10 +28,12 @@ from langgraph.graph import END, START, StateGraph
 from .nodes import (
     booking_flow_node,
     classify_node,
+    clarify_node,
     evidence_check_node,
     french_answer_node,
     gather_node,
     handoff_node,
+    injection_guard_node,
     unsupported_node,
 )
 
@@ -49,6 +51,8 @@ class GraphState(TypedDict, total=False):
     customer_id: str | None          # None = anonymous (no demo session)
     route: str
     handoff: dict | None             # topic/urgency/category parameters
+    classifier: dict                 # classification trace (source, flags)
+    reason_candidate: str            # enum-validated reason from classifier
     tools_called: list
     api_values: dict                 # authorized API values for the prompt
     citations: list                  # public passages (incl. text) for prompt
@@ -66,8 +70,12 @@ class GraphState(TypedDict, total=False):
 
 def _after_classify(state: GraphState) -> str:
     route = state.get("route")
+    if route == "injection":
+        return "injection_guard"
     if route in ("sensitive", "billing_dispute", "unsupported_mutation"):
         return "handoff"
+    if route in ("clarify", "out_of_scope"):
+        return "clarify"
     if route == "booking":
         return "booking_flow"
     if route == "unsupported":
@@ -101,10 +109,13 @@ def build_conversation():
     workflow.add_node("booking_flow", booking_flow_node)
     workflow.add_node("handoff", handoff_node)
     workflow.add_node("unsupported", unsupported_node)
+    workflow.add_node("clarify", clarify_node)
+    workflow.add_node("injection_guard", injection_guard_node)
     workflow.add_edge(START, "classify")
     workflow.add_conditional_edges("classify", _after_classify, {
         "gather": "gather", "booking_flow": "booking_flow",
-        "handoff": "handoff", "unsupported": "unsupported"})
+        "handoff": "handoff", "unsupported": "unsupported",
+        "clarify": "clarify", "injection_guard": "injection_guard"})
     workflow.add_conditional_edges("gather", _after_gather, {
         "evidence_check": "evidence_check", "booking_flow": "booking_flow",
         "handoff": "handoff"})
@@ -115,6 +126,8 @@ def build_conversation():
         "handoff": "handoff", "end": END})
     workflow.add_edge("handoff", END)
     workflow.add_edge("unsupported", END)
+    workflow.add_edge("clarify", END)
+    workflow.add_edge("injection_guard", END)
     return workflow.compile()
 
 
@@ -134,6 +147,8 @@ def run_conversation(message: str, history: list | None,
         "history": [dict(turn) for turn in (history or [])],
         "session_token": session_token,
         "customer_id": customer_id,
+        "classifier": {},
+        "reason_candidate": "",
         "tools_called": [],
         "api_values": {},
         "citations": [],
@@ -147,6 +162,7 @@ def run_conversation(message: str, history: list | None,
     return {
         "reply": result.get("reply", ""),
         "route": result.get("route", "unknown"),
+        "classification": dict(result.get("classifier") or {}),
         "tools_called": result.get("tools_called", []),
         "pending_booking": _pending_view(session_token),
         "handoff_id": result.get("handoff_id"),

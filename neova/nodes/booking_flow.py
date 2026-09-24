@@ -32,7 +32,8 @@ _ASK_SLOT_CHOICE = ("Indiquez le numéro du créneau souhaité "
                     "(par exemple « créneau 1 ») ou un identifiant SLOT.")
 _NO_SLOTS = ("Aucun créneau technicien n'est disponible pour le moment. "
              "Souhaitez-vous être mis en relation avec un conseiller ?")
-_RE_ASK = "Pour confirmer, répondez « oui » ; pour annuler, répondez « non »."
+_RE_ASK = ("Pour confirmer, répondez exactement : CONFIRMER RDV {code} ; "
+           "pour annuler, répondez exactement : ANNULER RDV {code}.")
 _REFUSED = ("D'accord, je n'enregistre aucun rendez-vous : la proposition "
             "est annulée.")
 _CONFLICT_REPLY = ("Ce créneau vient d'être pris ou n'est plus disponible. "
@@ -111,15 +112,23 @@ def booking_flow_node(state: GraphState) -> GraphState:
         return updates
 
     pending = conversation.pending(token)
-
-    # 1. Explicit user yes (deterministic gate) on an already-proposed pair.
-    if pending and pending.awaiting_confirmation and conversation.is_affirmation(message):
-        updates.update(_execute_booking(state, pending, tools_called))
-        return updates
-    if pending and pending.awaiting_confirmation and conversation.is_refusal(message):
+    if conversation.is_code_attempt(message) and (pending is None or pending.expired):
         conversation.clear(token)
-        updates["reply"] = _REFUSED
+        updates["reply"] = ("Ce code de confirmation a expiré. Aucun rendez-vous "
+                            "n'a été créé. Recommencez pour obtenir une nouvelle proposition.")
         return updates
+
+    # 1. Strict deterministic gate: only the exact code phrase shown in the
+    #    proposal arms (or cancels) the booking; "oui" books nothing.
+    if pending and pending.awaiting_confirmation:
+        code = pending.code
+        if conversation.is_confirmation(message, code):
+            updates.update(_execute_booking(state, pending, tools_called))
+            return updates
+        if conversation.is_cancellation(message, code):
+            conversation.clear(token)
+            updates["reply"] = _REFUSED
+            return updates
 
     # 2. First booking turn on the direct booking route: mandatory
     #    Pro-contract context read, then start the pending state.
@@ -143,9 +152,14 @@ def booking_flow_node(state: GraphState) -> GraphState:
         pending = conversation.start(token, customer)
 
     # 3. Deterministic updates from the user message (change clears confirmation).
+    #    The reason comes from the validated classifier candidate first and
+    #    from the code-side keyword extraction as fallback; both are checked
+    #    against the fixed enum before use.
     offered = conversation.offered(token)
     slot_id = conversation.extract_slot(message, offered)
-    reason_id = conversation.extract_reason(message)
+    reason_id = (state.get("reason_candidate")
+                 if state.get("reason_candidate") in conversation.REASON_LABELS
+                 else None) or conversation.extract_reason(message)
     if pending is None:
         pending = conversation.start(token, customer)
 
@@ -175,12 +189,15 @@ def booking_flow_node(state: GraphState) -> GraphState:
         updates.update(_offer_slots(state, token, customer, tools_called))
         return updates
     if not pending.proposed:
-        conversation.mark_proposed(token)
+        pending = conversation.mark_proposed(token)
+        code = pending.code
         updates["reply"] = (
             f"Je vous propose un rendez-vous technicien : créneau "
             f"{pending.slot_label}, motif « {_reason_label(pending.reason_id)} ». "
-            f"Confirmez-vous exactement ce créneau et ce motif ? "
-            f"Répondez « oui » pour confirmer ou « non » pour annuler.")
+            f"Pour confirmer, répondez exactement : "
+            f"{conversation.confirmation_phrase(code)}. "
+            f"Pour annuler, répondez exactement : "
+            f"{conversation.cancellation_phrase(code)}.")
         return updates
-    updates["reply"] = _RE_ASK
+    updates["reply"] = _RE_ASK.format(code=pending.code)
     return updates
