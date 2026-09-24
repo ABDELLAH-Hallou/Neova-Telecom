@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "reviewed": "2026-09-23",
+  "sources": [
+    {
+      "source_id": "cgv-resiliation",
+      "path": "cgv-resiliation.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-04-02",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "faq-box-internet",
+      "path": "faq-box-internet.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-05-18",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "faq-espace-client",
+      "path": "faq-espace-client.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-04-29",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "faq-facturation",
+      "path": "faq-facturation.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-06-20",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "faq-retour-equipement",
+      "path": "faq-retour-equipement.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-01-15",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "grille-tarifaire-2026",
+      "path": "grille-tarifaire-2026.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-06-01",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "politique-geste-commercial",
+      "path": "politique-geste-commercial.pdf",
+      "status": "current",
+      "access": "internal",
+      "updated": "2026-05-30",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "procedure-demenagement",
+      "path": "procedure-demenagement.pdf",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-03-11",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "procedure-escalade-n2",
+      "path": "procedure-escalade-n2.pdf",
+      "status": "current",
+      "access": "internal",
+      "updated": "2026-06-14",
+      "pages": 2,
+      "non_contractual": false
+    },
+    {
+      "source_id": "promo-rentree-2024",
+      "path": "promo-rentree-2024.pdf",
+      "status": "deprecated",
+      "access": "public",
+      "updated": "2024-09-01",
+      "pages": 1,
+      "non_contractual": false
+    },
+    {
+      "source_id": "fiche-roaming-international-scan",
+      "path": "fiche-roaming-international-scan.png",
+      "status": "current",
+      "access": "public",
+      "updated": "2026-02-27",
+      "pages": 1,
+      "non_contractual": true,
+      "transcription": "fiche-roaming-international-scan.txt",
+      "sha256": "032f1ac426617c4cf6d71b82cc6f045ce06e8f281c2be4a14d545eca0c9369d3"
+    }
+  ]
+}

@@ -14,6 +14,8 @@ venv/
 .DS_Store
 *.swp
 .cache/
+scripts/
+output/
 .opencode/
 *.db
 *.db-journal

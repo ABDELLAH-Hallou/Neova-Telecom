@@ -39,6 +39,11 @@ def get_openrouter_base_url() -> str:
     )
 
 
+def get_embedding_model() -> str:
+    """Return the configured OpenRouter embedding model name."""
+    return _require("EMBEDDING_MODEL", "OpenRouter embeddings via retrieval")
+
+
 def require_openrouter_api_key() -> str:
     """Return the OpenRouter key; fail closed with a sanitized error."""
     return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")

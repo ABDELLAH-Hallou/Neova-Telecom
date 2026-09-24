@@ -226,6 +226,188 @@ def init_db() -> None:
         _initialize(Path(_db_path()).resolve())
 
 
+# Retrieval schema (issue #4): public chunks, their cached vectors and a
+# standalone FTS5 index rebuilt from `chunks`. Idempotent; existing
+# foundation databases gain these tables without touching customer data.
+RETRIEVAL_SCHEMA = """
+            CREATE TABLE IF NOT EXISTS _meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chunks (
+                chunk_hash TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                page_start INTEGER NOT NULL,
+                page_end INTEGER NOT NULL,
+                section TEXT NOT NULL,
+                access TEXT NOT NULL,
+                word_count INTEGER NOT NULL,
+                text TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chunk_vectors (
+                chunk_hash TEXT NOT NULL,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (chunk_hash, model),
+                FOREIGN KEY (chunk_hash) REFERENCES chunks(chunk_hash)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+                text,
+                source_id UNINDEXED,
+                chunk_hash UNINDEXED
+            );
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                access TEXT NOT NULL,
+                updated TEXT NOT NULL,
+                pages INTEGER NOT NULL,
+                non_contractual INTEGER NOT NULL,
+                reviewed TEXT NOT NULL
+            );
+            """
+
+
+def init_retrieval_schema(conn: sqlite3.Connection) -> None:
+    """Create retrieval tables on any connection; safe to call repeatedly."""
+    conn.executescript(RETRIEVAL_SCHEMA)
+
+
+def sync_sources_table(conn: sqlite3.Connection) -> None:
+    """Mirror the manifest (source of truth) into the runtime sources table.
+
+    Idempotent: upserts every manifest entry with its ``reviewed`` date and
+    deletes rows for sources no longer in the manifest. Called from the
+    indexing pipeline; never writes to the supplied corpus.
+    """
+    from . import sources
+
+    payload = sources.load_sources_manifest()
+    reviewed = payload["reviewed"]
+    sources_rows = sources.all_sources()
+    with conn:
+        for source in sources_rows:
+            conn.execute(
+                "INSERT INTO sources (source_id, path, status, access, updated, pages, "
+                "non_contractual, reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(source_id) DO UPDATE SET path = excluded.path, "
+                "status = excluded.status, access = excluded.access, "
+                "updated = excluded.updated, pages = excluded.pages, "
+                "non_contractual = excluded.non_contractual, reviewed = excluded.reviewed",
+                (source.source_id, source.path, source.status, source.access,
+                 source.updated, source.pages, int(source.non_contractual), reviewed),
+            )
+        conn.execute(
+            "DELETE FROM sources WHERE source_id NOT IN "
+            f"({','.join('?' * len(sources_rows))})",
+            [source.source_id for source in sources_rows],
+        )
+
+
+def replace_chunk_index(conn: sqlite3.Connection, chunks) -> None:
+    """Transactionally replace the public chunk index (rows + FTS5).
+
+    Cached vectors for still-present chunks survive; rows for chunks no
+    longer produced are deleted. ``chunks`` are objects exposing
+    ``chunk_hash``, ``source_id``, ``source_path``, ``page_start``,
+    ``page_end``, ``section``, ``access``, ``word_count`` and ``text``.
+    """
+    current_hashes = [chunk.chunk_hash for chunk in chunks]
+    placeholders = ",".join("?" * len(current_hashes))
+    with conn:
+        conn.execute(
+            f"DELETE FROM chunk_vectors WHERE chunk_hash NOT IN ({placeholders})",
+            current_hashes,
+        )
+        conn.execute(
+            f"DELETE FROM chunks WHERE chunk_hash NOT IN ({placeholders})",
+            current_hashes,
+        )
+        conn.execute("DELETE FROM chunk_fts")
+        for chunk in chunks:
+            conn.execute(
+                "INSERT OR REPLACE INTO chunks (chunk_hash, source_id, source_path, "
+                "page_start, page_end, section, access, word_count, text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (chunk.chunk_hash, chunk.source_id, chunk.source_path, chunk.page_start,
+                 chunk.page_end, chunk.section, chunk.access, chunk.word_count, chunk.text),
+            )
+            conn.execute(
+                "INSERT INTO chunk_fts (text, source_id, chunk_hash) VALUES (?, ?, ?)",
+                (chunk.text, chunk.source_id, chunk.chunk_hash),
+            )
+
+
+def has_vector(conn: sqlite3.Connection, chunk_hash: str, model: str) -> bool:
+    """Whether a cached embedding exists for the chunk under the model."""
+    return conn.execute(
+        "SELECT 1 FROM chunk_vectors WHERE chunk_hash = ? AND model = ?",
+        (chunk_hash, model),
+    ).fetchone() is not None
+
+
+def store_vectors(conn: sqlite3.Connection, model: str,
+                  items: list[tuple[str, bytes, int]]) -> None:
+    """Cache serialized embedding vectors keyed by chunk hash + model."""
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO chunk_vectors (chunk_hash, model, dim, vector, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(chunk_hash, model, dim, blob, now_utc().isoformat())
+             for chunk_hash, blob, dim in items],
+        )
+
+
+def vector_count(conn: sqlite3.Connection, model: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM chunk_vectors WHERE model = ?", (model,)
+    ).fetchone()[0]
+
+
+def chunks_without_vector(conn: sqlite3.Connection, model: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM chunks c WHERE NOT EXISTS "
+        "(SELECT 1 FROM chunk_vectors v WHERE v.chunk_hash = c.chunk_hash AND v.model = ?)",
+        (model,),
+    ).fetchone()[0]
+
+
+def chunk_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+
+def fts_hits(conn: sqlite3.Connection, match: str, limit: int) -> list[tuple[str, float]]:
+    """Raw FTS5 bm25 ranking (smaller is better) for a MATCH expression."""
+    return conn.execute(
+        "SELECT chunk_hash, bm25(chunk_fts) FROM chunk_fts "
+        "WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts) LIMIT ?",
+        (match, limit),
+    ).fetchall()
+
+
+def public_vectors(conn: sqlite3.Connection, model: str) -> list[tuple[str, bytes]]:
+    """Cached vectors for public chunks under the model (hash, blob)."""
+    return conn.execute(
+        "SELECT v.chunk_hash, v.vector FROM chunk_vectors v "
+        "JOIN chunks c ON c.chunk_hash = v.chunk_hash "
+        "WHERE v.model = ? AND c.access = 'public'",
+        (model,),
+    ).fetchall()
+
+
+def load_public_chunk(conn: sqlite3.Connection, chunk_hash: str) -> tuple | None:
+    """Public chunk row by hash; internal chunks are never returned."""
+    return conn.execute(
+        "SELECT chunk_hash, source_id, source_path, page_start, page_end, section, text "
+        "FROM chunks WHERE chunk_hash = ? AND access = 'public'",
+        (chunk_hash,),
+    ).fetchone()
+
+
 def _initialize(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(str(path))
@@ -299,6 +481,7 @@ def _initialize(path: Path) -> None:
             );
             """
         )
+        conn.executescript(RETRIEVAL_SCHEMA)
         # Existing foundation databases need the same guarantee as fresh ones.
         # Never silently discard duplicate historical appointments.
         duplicate = conn.execute(
@@ -488,3 +671,18 @@ def save_handoff(token: str, customer_id: str, category_id: str,
         )
         return {"handoff_id": cursor.lastrowid, "category_id": category_id,
                 "customer_reference": customer_id, "urgency": urgency}
+
+
+def get_meta(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    """Return a _meta value for retrieval indexing state, or the default."""
+    row = conn.execute("SELECT value FROM _meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Store a _meta value; callers own the surrounding transaction."""
+    conn.execute(
+        "INSERT INTO _meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
