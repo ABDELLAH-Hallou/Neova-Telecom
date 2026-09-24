@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from neova import chunking, conversation, db, graph, retrieval, tools
+from neova import chunking, conversation, db, retrieval, tools
 from neova.app import app
 from neova.embeddings import vector_to_blob
 
@@ -118,9 +118,9 @@ def local_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("DEMO_TIMESTAMP", "2026-08-26T12:00:00+02:00")
     conversation.reset()
     model = FakeChatModel()
-    monkeypatch.setattr(graph, "answer_model", lambda: model)
+    monkeypatch.setattr("neova.nodes.french_answer.answer_model", lambda: model)
     embedder = FakeEmbedder()
-    monkeypatch.setattr(graph, "embedder_factory", lambda: embedder)
+    monkeypatch.setattr("neova.nodes.gather.embedder_factory", lambda: embedder)
     conn = db.connect(str(path))
     try:
         db.init_retrieval_schema(conn)

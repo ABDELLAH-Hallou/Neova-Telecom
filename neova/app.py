@@ -1,4 +1,4 @@
-"""Local FastAPI application hosting the foundation graph and SQLite seed."""
+"""Local FastAPI application hosting the customer agent and SQLite seed."""
 
 from contextlib import asynccontextmanager
 
@@ -15,14 +15,13 @@ from .dto import (
     ChatRequest,
     CustomerSummary,
     DemoSessionRequest,
-    GraphRequest,
     HandoffRequest,
     HandoffResult,
     IncidentRead,
     SlotRead,
 )
 from .db import close_session_connections, init_db
-from .graph import compiled, run_conversation
+from .graph import run_conversation
 from .models import chat_model
 from .session import fixture_customers, issue_session
 
@@ -38,7 +37,7 @@ async def lifespan(app: FastAPI):
         app.state.db_ready = False # shutdown
 
 
-app = FastAPI(lifespan=lifespan, title="Neova Foundation API")
+app = FastAPI(lifespan=lifespan, title="Neova Telecom Customer Agent API")
 
 
 def demo_session(x_demo_session: str | None = Header(default=None, alias="X-Demo-Session")) -> tuple[str, str]:
@@ -110,7 +109,7 @@ def create_handoff(request: HandoffRequest, session: tuple[str, str] = Depends(d
 def health():
     return {
         "status": "ok",
-        "mode": "foundation",
+        "mode": "customer_agent",
         "db_ready": app.state.db_ready,
         "fixture_customers": len(fixture_customers()),
     }
@@ -135,16 +134,10 @@ def agent_chat(request: AgentChatRequest, session: tuple[str | None, str | None]
         token, customer_id)
 
 
-@app.post("/foundation/graph")
-def run_graph(graph_request: GraphRequest):
-    """Exercise the bounded graph, never a customer-facing reply."""
-    result = compiled.invoke({"input": graph_request.prompt, "history": []})
-    return {"classification": result["classification"], "output": result["output"]}
-
-
 @app.post("/models/chat")
 def run_model_chat(request: ChatRequest):
-    """Invoke the selected provider without changing the foundation graph."""
+    """Invoke the selected provider directly; the conversation graph does
+    its own bounded model calls via ``neova.nodes.french_answer``."""
     try:
         model = chat_model(request.provider)
     except ConfigurationError as error:

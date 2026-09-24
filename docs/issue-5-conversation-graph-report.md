@@ -1,5 +1,13 @@
 # Issue #5 / PR 4 — conversation graph report
 
+> **Addendum (post-issue #5 cleanup):** `POST /foundation/graph`, its `GraphRequest`
+> DTO and the placeholder foundation graph have since been removed; the app is now
+> titled *Neova Telecom Customer Agent API* with `GET /health` returning
+> `"mode": "customer_agent"`, and `neova/graph.py` now holds only the state, the
+> bounded wiring and `run_conversation` — each node lives in `neova/nodes/`. The
+> sections below describe the state of this branch at issue #5 completion and are
+> kept as the record of that change.
+
 **Status:** implemented on branch `5-pr-4-conversation-graph-bounded-routes-confirmation-and-handoff`, following the approved plan (`docs/issue-5-conversation-graph-plan.md`), steps 1–7 only. Nothing has been added, committed or pushed. All tests are offline (faked chat model and embeddings, temporary databases, frozen demo clock); no network call was made and no OpenRouter spend was incurred.
 
 ## 1. Files changed

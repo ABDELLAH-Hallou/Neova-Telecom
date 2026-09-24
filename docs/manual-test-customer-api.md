@@ -22,7 +22,7 @@ uv run --locked --extra dev python main.py
 curl -i http://127.0.0.1:8000/health
 ```
 
-Expected: `200`, `"status": "ok"`, `"mode": "foundation"`, `"db_ready": true`, `"fixture_customers": 6`.
+Expected: `200`, `"status": "ok"`, `"mode": "customer_agent"`, `"db_ready": true`, `"fixture_customers": 6`.
 
 ### 2. Create a demo session
 

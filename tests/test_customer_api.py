@@ -184,8 +184,6 @@ def test_dto_limits_return_422_over_http(local_api):
         "extra": "field",
     }).status_code == 422
     assert client.post("/demo/sessions", json={"customer_id": "   "}).status_code == 422
-    assert client.post("/foundation/graph", json={"prompt": "x" * 5001}).status_code == 422
-    assert client.post("/foundation/graph", json={"prompt": "x" * 5000}).status_code == 200
     assert client.post("/models/chat", json={"prompt": "x" * 5001, "provider": "openrouter"}).status_code == 422
 
 

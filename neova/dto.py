@@ -111,10 +111,6 @@ class HandoffResult(BaseModel):
     urgency: Literal["normal", "urgent"]
 
 
-class GraphRequest(RequestModel):
-    prompt: Prompt
-
-
 class ChatRequest(RequestModel):
     prompt: Prompt
     provider: Literal["openrouter", "openai"]
