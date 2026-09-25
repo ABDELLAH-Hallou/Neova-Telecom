@@ -1,10 +1,10 @@
 """Local FastAPI application hosting the customer agent and SQLite seed."""
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 
-from . import customer_api, db, observability, usage
+from . import chunking, customer_api, db, observability, usage
 from .dto import (
     AgentChatRequest,
     AgentChatResult,
@@ -27,6 +27,17 @@ from .session import fixture_customers, issue_session
 async def lifespan(app: FastAPI):
     usage.configure_from_env()  # persist redacted usage when USAGE_LOG is set
     init_db()  # startup
+    # A clean checkout must have a searchable public corpus after this one
+    # server command. Build the local FTS5 index without paid embedding calls;
+    # the explicit retrieval index command remains the budget-gated vector path.
+    with closing(db.connect()) as conn:
+        db.init_retrieval_schema(conn)
+        if db.chunk_count(conn) == 0:
+            chunks = chunking.public_chunks()
+            if not chunks:
+                raise RuntimeError("No public corpus chunks available")
+            db.sync_sources_table(conn)
+            db.replace_chunk_index(conn, chunks)
     app.state.db_ready = True
     try:
         yield # running

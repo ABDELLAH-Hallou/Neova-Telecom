@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from neova import clock, config, db, session
+from neova import clock, config, db, retrieval, session
 from neova.app import app
 from neova.utils import load_fixture
 
@@ -65,6 +65,34 @@ def test_seed_and_restart(database):
                 ("NOT-A-SLOT", "NEO-88213", "installation", "bad-fk", "2026-08-26T12:00:00+02:00"),
             )
     assert hashlib.sha256(FIXTURE.read_bytes()).digest() == before
+
+
+def test_one_command_startup_indexes_public_fts_without_paid_calls(database, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    with TestClient(app) as client:
+        assert client.get("/health").json()["db_ready"] is True
+        with db.connect() as conn:
+            outcome = retrieval.search(conn, "frais de rejet", mode="fts")
+            count = db.chunk_count(conn)
+            assert count > 0
+            assert outcome.results and "index_empty" not in outcome.degraded
+            assert all(p.source_id not in {"politique-geste-commercial", "procedure-escalade-n2"}
+                       for p in outcome.results)
+    # Even with live credentials present, a restart must not invoke an
+    # embedder or spend credit while preparing the local search index.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    monkeypatch.setenv("EMBEDDING_MODEL", "placeholder")
+    from neova import embeddings
+    monkeypatch.setattr(embeddings, "openrouter_embedder", lambda: pytest.fail(
+        "startup attempted a paid embedding call"))
+    with TestClient(app):
+        with db.connect() as conn:
+            assert db.chunk_count(conn) == count  # restart does not reindex or erase data
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database.parent / 'with-key.db'}")
+    with TestClient(app):
+        with db.connect() as conn:
+            assert db.chunk_count(conn) == count  # fresh start with a key is also free
 
 
 def test_session_singleton_connections_are_isolated(database, monkeypatch, tmp_path):
