@@ -559,30 +559,6 @@ curl -s -X POST "$BASE_URL/agent/chat" -H "X-Demo-Session: $TOKEN_PRO" \
 
 ## Additional direct endpoint checks
 
-### Direct model endpoint
-
-```bash
-jq -n \
-  --arg provider "openrouter" \
-  --arg prompt "Réponds uniquement : bonjour" \
-  '{provider:$provider, prompt:$prompt}' |
-curl -i -X POST "$BASE_URL/models/chat" \
-  -H 'Content-Type: application/json; charset=utf-8' \
-  --data-binary @-
-```
-
-Expected: `200`. This consumes one chat-model call.
-
-Invalid provider:
-
-```bash
-curl -i -X POST "$BASE_URL/models/chat" \
-  -H 'Content-Type: application/json' \
-  -d '{"provider":"invalid","prompt":"Bonjour"}'
-```
-
-Expected: `422`, with no model call.
-
 ### Direct handoff endpoint
 
 ```bash
@@ -669,7 +645,7 @@ For every `/agent/chat` response in sections 7–14, verify:
 | `citations` | every entry has `source_id`, `source_path`, `page_start`/`page_end`, `section`; internal sources (`politique-geste-commercial`, `procedure-escalade-n2`) must **never** appear |
 | `gate_flags` | pricing questions may carry `archived_pricing`, `fee_timing_conflict`, `invoice_line_items_absent`, `non_contractual_source` — the reply must express the reservation, not resolve it |
 | `degraded` | retrieval degradation codes (`query_embedding_failed_fts_fallback`, `index_empty`, …) appear when embeddings are unavailable; the reply must carry a matching "Réserve" notice |
-| HTTP codes | `200` chat/success, `201` created, `401` bad session, `403` cross-customer, `404` unknown fixture/key, `422` malformed body, `503` model misconfigured on `/models/chat` |
+| HTTP codes | `200` chat/success, `201` created, `401` bad session, `403` cross-customer, `404` unknown fixture/key, `422` malformed body |
 
 ---
 

@@ -49,6 +49,25 @@ def get_classifier_model() -> str:
     return _require("CLASSIFIER_MODEL", "OpenRouter intent classification")
 
 
+def get_chat_fallback_model() -> Optional[str]:
+    """Return the configured fallback chat model, or None when unset.
+
+    The fallback is optional at runtime (a missing name degrades to
+    primary-only, never a guess); issue #6 requires it to be configured
+    and verified as a different upstream provider before publication.
+    """
+    return _get_env("CHAT_FALLBACK_MODEL")
+
+
+def get_usage_log_path() -> Optional[str]:
+    """Return the optional redacted usage-log JSONL path, or None.
+
+    ``USAGE_LOG`` persists the per-call usage ledger (model, provider,
+    tokens, cost) so spend evidence survives the server stopping.
+    """
+    return _get_env("USAGE_LOG")
+
+
 def require_openrouter_api_key() -> str:
     """Return the OpenRouter key; fail closed with a sanitized error."""
     return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")

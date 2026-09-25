@@ -111,11 +111,6 @@ class HandoffResult(BaseModel):
     urgency: Literal["normal", "urgent"]
 
 
-class ChatRequest(RequestModel):
-    prompt: Prompt
-    provider: Literal["openrouter", "openai"]
-
-
 class ChatMessage(RequestModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=MAX_PROMPT_LENGTH)

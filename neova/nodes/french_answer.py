@@ -5,15 +5,26 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from .. import usage
 from ..prompt import load
 
 if TYPE_CHECKING:
     from ..graph import GraphState
 
 MAX_PASSAGE_CHARS = 600
+# Hard output-token bound for the grounded answer: retries are bounded
+# by the provider policy, and this bounds the response cost as well.
+ANSWER_MAX_TOKENS = 500
 
 MODEL_UNAVAILABLE_REPLY = (
     "Je ne peux pas produire de réponse documentée pour le moment. "
+    "Souhaitez-vous être mis en relation avec un conseiller via nos canaux officiels ?")
+
+# A required customer-API read failed even after its single bounded retry:
+# deterministic short French failure + handoff offer, no model answer built
+# on partial data.
+READ_FAILURE_REPLY = (
+    "Je n'ai pas pu consulter votre dossier pour le moment ({detail}). "
     "Souhaitez-vous être mis en relation avec un conseiller via nos canaux officiels ?")
 
 _UNCERTAINTY_NOTICES = {
@@ -29,13 +40,23 @@ _UNCERTAINTY_NOTICES = {
 
 
 def answer_model():
-    """Configured chat model, or None when not configured (fail honest).
+    """Configured chat model through the shared bounded policy, or None.
 
-    Patch point for tests: inject a double exposing ``invoke(prompt)``.
+    The model runs on ``neova.provider`` (issue #6): bounded 429/529
+    retries with Retry-After/backoff+jitter on the primary route, then
+    the verified fallback route; exhaustion raises ProviderUnavailable,
+    which this node answers with the French unavailability/handoff
+    reply. Patch point for tests: inject a double exposing
+    ``invoke(prompt)``.
     """
     try:
-        from ..models import chat_model
-        return chat_model("openrouter")
+        from ..provider import PolicyChatModel
+        # Usage accounting requested so the ledger can record real cost;
+        # a missing cost stays unknown, never zero. ANSWER_MAX_TOKENS
+        # bounds the response cost (retries are bounded by the policy).
+        return PolicyChatModel(
+            kind=usage.KIND_CHAT, max_tokens=ANSWER_MAX_TOKENS,
+            extra_body={"usage": {"include": True}})
     except Exception:
         return None
 
@@ -82,17 +103,32 @@ def _answer_prompt(state: GraphState) -> str:
 
 def french_answer_node(state: GraphState) -> GraphState:
     steps = state.get("steps", 0) + 1
+    degraded = list(state.get("degraded", []))
+
+    # An essential read failed even after its bounded retry: short French
+    # failure + handoff offer, deterministic, no answer built on partial data.
+    read_failure = (state.get("api_values") or {}).get("read_failure")
+    if read_failure:
+        return {"reply": READ_FAILURE_REPLY.format(
+                    detail=read_failure.get("detail", "service indisponible")),
+                "degraded": degraded + ["api_read_failed_essential"],
+                "steps": steps}
+
     model = answer_model()
     if model is None:
         reply = MODEL_UNAVAILABLE_REPLY
+        degraded.append("chat_model_unconfigured")
     else:
         try:
             response = model.invoke(_answer_prompt(state))
             reply = str(response.content).strip() or MODEL_UNAVAILABLE_REPLY
         except Exception:
-            reply = MODEL_UNAVAILABLE_REPLY  # bounded: one call, no retry here
+            # Bounded: the shared policy already retried and fell back;
+            # exhaustion lands here as the safe French terminal answer.
+            reply = MODEL_UNAVAILABLE_REPLY
+            degraded.append("chat_model_unavailable")
     if state.get("uncertain"):
         notice = _uncertainty_notice(state)
         if notice:
             reply += "\n" + notice
-    return {"reply": reply, "steps": steps}
+    return {"reply": reply, "degraded": degraded, "steps": steps}

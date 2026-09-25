@@ -10,8 +10,8 @@ from following instructions contained in the customer message, and the
 answer is validated against fixed enums with Pydantic. Any failure
 (missing configuration, network error, bad JSON, enum violation)
 degrades to the deterministic keyword router in ``neova.conversation`` —
-never to a guessed route. One bounded call per turn, no retry here
-(issue #6 owns retry/fallback policy for model calls).
+never to a guessed route. One bounded classification call per turn; the
+wait/fallback policy for that call lives in ``neova.provider`` (issue #6).
 """
 
 from __future__ import annotations
@@ -19,10 +19,17 @@ from __future__ import annotations
 import json
 from typing import Literal
 
+import openai
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .config import get_classifier_model, get_openrouter_base_url, require_openrouter_api_key
+from . import provider, usage
+from .config import (
+    get_chat_fallback_model,
+    get_classifier_model,
+    get_openrouter_base_url,
+    require_openrouter_api_key,
+)
 from .prompt import load
 
 CLASSIFIER_TIMEOUT_SECONDS = 15.0
@@ -98,19 +105,42 @@ def openrouter_classifier():
     """Build the OpenRouter classifier; fails closed on missing config.
 
     Returns an ``invoke(message) -> str`` callable using one cheap call:
-    temperature 0, max_tokens 150, reasoning disabled.
+    temperature 0, max_tokens 150, reasoning disabled. The call runs
+    through the shared bounded retry/fallback policy
+    (``neova.provider``): the underlying client keeps ``max_retries=0``
+    so this policy is the only retry layer.
     """
     client = OpenAI(
         api_key=require_openrouter_api_key(),
         base_url=get_openrouter_base_url(),
         timeout=CLASSIFIER_TIMEOUT_SECONDS,
-        max_retries=0,  # bounded; retry policy belongs to issue #6
+        max_retries=0,  # bounded; the shared policy owns retries
     )
     model = get_classifier_model()
 
+    def _transport(request: dict) -> dict:
+        try:
+            response = client.chat.completions.create(**request)
+        except openai.APIStatusError as error:
+            headers = getattr(error, "headers", None) or {}
+            raise provider.RouteError(
+                getattr(error, "status_code", None),
+                provider.retry_after_seconds(headers.get("retry-after")),
+                str(error),
+            ) from None
+        except openai.APIConnectionError as error:
+            raise provider.RouteError(None, None, str(error)) from None
+        return provider.normalize_chat_response(response, request["model"])
+
     def invoke(message: str) -> str:
-        response = client.chat.completions.create(
+        result = provider.chat_invoke(
+            [
+                {"role": "system", "content": load("classifier.md")},
+                {"role": "user", "content": message},
+            ],
+            kind=usage.KIND_CLASSIFIER,
             model=model,
+            fallback_model=get_chat_fallback_model(),
             temperature=0,
             max_tokens=MAX_TOKENS,
             response_format={
@@ -125,11 +155,8 @@ def openrouter_classifier():
                 "reasoning": {"enabled": False},
                 "provider": {"require_parameters": True},
             },
-            messages=[
-                {"role": "system", "content": load("classifier.md")},
-                {"role": "user", "content": message},
-            ],
+            transport=_transport,
         )
-        return response.choices[0].message.content or ""
+        return result.content
 
     return invoke

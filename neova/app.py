@@ -4,15 +4,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 
-from . import customer_api, db
-from .config import ConfigurationError
+from . import customer_api, db, usage
 from .dto import (
     AgentChatRequest,
     AgentChatResult,
     AppointmentRead,
     AppointmentRequest,
     AppointmentResult,
-    ChatRequest,
     CustomerSummary,
     DemoSessionRequest,
     HandoffRequest,
@@ -22,12 +20,12 @@ from .dto import (
 )
 from .db import close_session_connections, init_db
 from .graph import run_conversation
-from .models import chat_model
 from .session import fixture_customers, issue_session
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    usage.configure_from_env()  # persist redacted usage when USAGE_LOG is set
     init_db()  # startup
     app.state.db_ready = True
     try:
@@ -132,14 +130,3 @@ def agent_chat(request: AgentChatRequest, session: tuple[str | None, str | None]
     return run_conversation(
         request.message, [message.model_dump() for message in request.history],
         token, customer_id)
-
-
-@app.post("/models/chat")
-def run_model_chat(request: ChatRequest):
-    """Invoke the selected provider directly; the conversation graph does
-    its own bounded model calls via ``neova.nodes.french_answer``."""
-    try:
-        model = chat_model(request.provider)
-    except ConfigurationError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from None
-    return {"provider": request.provider, "output": model.invoke(request.prompt).content}

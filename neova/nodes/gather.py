@@ -2,8 +2,12 @@
 
 At most two customer-API reads happen here: the context summary (which
 also performs the mandatory Pro-contract check) and one route-specific
-read (incidents for internet). The single retrieval pass degrades
-visibly to FTS5 when no embedder is configured.
+read (incidents for internet). Each safe read is retried once on a
+transient server failure (``neova.tools``); if the read still fails, the
+failure is recorded and surfaced so the answer node gives a short French
+failure with a handoff offer instead of answering on partial data. The
+single retrieval pass degrades visibly to FTS5 when no embedder is
+configured.
 """
 
 from __future__ import annotations
@@ -70,6 +74,9 @@ def gather_node(state: GraphState) -> GraphState:
                 return updates
         except ToolError as error:
             api_values["summary_error"] = error.detail
+            api_values["read_failure"] = {
+                "read": "customer_summary", "status": error.status_code,
+                "detail": error.detail}
             degraded.append("api_read_failed")
 
     if route == "internet" and token and customer:
@@ -78,7 +85,17 @@ def gather_node(state: GraphState) -> GraphState:
             tools_called.append("incidents.read")
         except ToolError as error:
             api_values["incidents_error"] = error.detail
+            api_values["read_failure"] = {
+                "read": "incidents", "status": error.status_code,
+                "detail": error.detail}
             degraded.append("api_read_failed")
+
+    # A failed essential read ends the turn here: the retrieval pass is
+    # skipped entirely so no embedding credit is spent on a turn that
+    # will end in the short French failure + handoff offer.
+    if "read_failure" in api_values:
+        updates["degraded"] = degraded + ["search_skipped_read_failure"]
+        return updates
 
     # At most one retrieval pass; unconfigured embedder degrades to FTS5.
     embed = embedder_factory()
