@@ -59,12 +59,12 @@ def gather_node(state: GraphState) -> GraphState:
 
     # Context read: the mandatory Pro-contract check on business routes.
     if customer and token and route != "termination":
+        tools_called.append("customer_summary.read")  # attempted, even if exhausted
         with observability.step(
                 "read-customer-summary", as_type="tool") as read_obs:
             try:
                 summary = tools.get_summary(token, customer)
                 summary.pop("customer_id", None)  # no identifiers in the prompt
-                tools_called.append("customer_summary.read")
                 read_obs.update(output="ok",
                                 metadata={"tool": "customer_summary.read"})
                 api_values["summary"] = summary
@@ -88,10 +88,10 @@ def gather_node(state: GraphState) -> GraphState:
                     return updates
 
     if route == "internet" and token and customer:
+        tools_called.append("incidents.read")  # attempted, even if exhausted
         with observability.step("read-incidents", as_type="tool") as read_obs:
             try:
                 api_values["incidents"] = tools.get_incidents(token)
-                tools_called.append("incidents.read")
                 read_obs.update(output="ok", metadata={"tool": "incidents.read"})
             except ToolError as error:
                 read_obs.update(output=f"failed:{error.status_code}",

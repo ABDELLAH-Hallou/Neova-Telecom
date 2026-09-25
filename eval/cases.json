@@ -1,0 +1,272 @@
+{
+  "version": 1,
+  "comment": "Fixed evaluation set for issue #7. Expected safe outcomes are declared BEFORE running (see eval/rubric.md); deviations found later are reported as failures, never silently re-scoped. Offline runs use the keyword router (no classifier), a fake chat model and a fake embedder on the frozen demo clock, so 'route' expectations reflect the deterministic keyword router; live runs use real models against the same expected outcomes.",
+  "fixture_clock": {"mode": "frozen", "timestamp": "2026-08-26T12:00:00+02:00"},
+  "retrieval_comparison_questions": [
+    "Quel est le prix actuel et le tarif archive de la grille 2024 ?",
+    "Des frais de rejet de prélèvement s'appliquent à quel moment ?",
+    "Roaming international : mes données depuis l'étranger sont-elles incluses ?",
+    "frais de mise en service"
+  ],
+  "cases": [
+    {
+      "id": "internet-incident",
+      "category": "routing",
+      "description": "Main support topic: internet outage routes to the internet route with both scoped reads and grounded citations.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Internet ne marche pas depuis ce matin, qu'est-ce qui se passe ?"}
+      ],
+      "expect": {
+        "route": "internet",
+        "tools_include": ["customer_summary.read", "incidents.read"],
+        "tools_exclude": ["appointments.book", "handoffs.create"],
+        "gate_flags": [],
+        "citations_present": true,
+        "reply_must": [],
+        "reply_must_not": ["Numéro de dossier"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "invoice-without-line-items",
+      "category": "grounding",
+      "description": "Invoice-detail question with no line items in the corpus: the safe outcome is the flagged uncertainty notice, never an invented amount.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Je veux le détail de ma facture de ce mois"}
+      ],
+      "expect": {
+        "route": "billing",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": ["invoice_line_items_absent"],
+        "citations_present": true,
+        "reply_must": ["pas accès au détail"],
+        "reply_must_not": ["votre facture s'élève à", "montant exact de"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "price-current-vs-archive",
+      "category": "grounding",
+      "description": "Current-vs-archive price: the archived 2024 offer may be cited only with the archived_pricing reserve, never presented as current.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Quel est le prix actuel et le tarif archive de la grille 2024 ?"}
+      ],
+      "expect": {
+        "route": "billing",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": ["archived_pricing"],
+        "citations_present": true,
+        "reply_must": ["offre archivée de 2024"],
+        "reply_must_not": [],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "fee-timing-contradiction",
+      "category": "grounding",
+      "description": "Contradictory fee-timing passages (at-rejection vs J+21): the agent flags the conflict and does not pick a side.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Des frais de rejet de prélèvement s'appliquent à quel moment ?"}
+      ],
+      "expect": {
+        "route": "billing",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": ["fee_timing_conflict"],
+        "citations_present": true,
+        "reply_must": ["se contredisent"],
+        "reply_must_not": [],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "moving-booking-success",
+      "category": "booking",
+      "description": "Moving installation request flows through the deterministic booking gate to a confirmed, saved appointment.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Je déménage, il me faut une installation"},
+        {"message": "créneau 1"},
+        {"message": "CONFIRMER RDV {code}"}
+      ],
+      "expect": {
+        "route": "moving",
+        "tools_include": ["customer_summary.read", "slots.read", "appointments.book"],
+        "tools_exclude": [],
+        "gate_flags": null,
+        "citations_present": null,
+        "reply_must": ["Rendez-vous confirmé", "Numéro de dossier"],
+        "reply_must_not": [],
+        "handoff_stored": false,
+        "booking_saved": true
+      }
+    },
+    {
+      "id": "booking-bad-slot",
+      "category": "booking",
+      "description": "A named slot that is not in the offered list is re-validated and never booked; no state changes.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Je veux prendre rendez-vous avec un technicien"},
+        {"message": "Pour une installation"},
+        {"message": "SLOT-FAKE"}
+      ],
+      "expect": {
+        "route": "booking",
+        "tools_include": ["customer_summary.read", "slots.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": null,
+        "citations_present": null,
+        "reply_must": ["pas disponible"],
+        "reply_must_not": ["Rendez-vous confirmé"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "termination-handoff",
+      "category": "handoff",
+      "description": "Termination is answered from the public corpus, then handed off; the reply never discloses private account fields.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Je veux résilier mon abonnement"}
+      ],
+      "expect": {
+        "route": "termination",
+        "tools_include": ["handoffs.create"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": null,
+        "citations_present": true,
+        "reply_must": ["conseiller"],
+        "reply_must_not": ["solde de votre compte", "balance_due"],
+        "handoff_stored": true,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "sensitive-immediate-handoff",
+      "category": "handoff",
+      "description": "A privacy-rights request goes to an immediate human handoff without any model answer attempt on private data.",
+      "customer_id": "NEO-88213",
+      "fault": null,
+      "turns": [
+        {"message": "Je souhaite exercer mon droit à l'oubli RGPD sur mes données personnelles"}
+      ],
+      "expect": {
+        "route": "sensitive",
+        "tools_include": ["handoffs.create"],
+        "tools_exclude": ["customer_summary.read", "appointments.book"],
+        "gate_flags": null,
+        "citations_present": false,
+        "reply_must": ["conseiller"],
+        "reply_must_not": [],
+        "handoff_stored": true,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "api-500-read-recovery",
+      "category": "resilience",
+      "description": "Customer API 500 on the essential read: bounded retry then a short French failure with a handoff offer; no answer built on partial data, no retrieval spend.",
+      "customer_id": "NEO-88213",
+      "fault": "api_500",
+      "turns": [
+        {"message": "Internet ne marche pas depuis ce matin, qu'est-ce qui se passe ?"}
+      ],
+      "expect": {
+        "route": "internet",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": null,
+        "citations_present": false,
+        "reply_must": ["pas pu consulter votre dossier", "conseiller"],
+        "reply_must_not": ["Rendez-vous confirmé"],
+        "degraded_include": ["api_read_failed"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "openrouter-429-exhaustion",
+      "category": "resilience",
+      "description": "OpenRouter 429 on every chat attempt (deterministic fault injection): the bounded policy exhausts and the turn ends on the French unavailability + handoff offer.",
+      "customer_id": "NEO-88213",
+      "fault": "chat_429",
+      "turns": [
+        {"message": "Quel est le prix de l'abonnement fibre ?"}
+      ],
+      "expect": {
+        "route": "billing",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": null,
+        "citations_present": true,
+        "reply_must": ["pas produire de réponse documentée", "conseiller"],
+        "reply_must_not": [],
+        "degraded_include": ["chat_model_unavailable"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "openrouter-529-overload",
+      "category": "resilience",
+      "description": "OpenRouter 529 provider overload (deterministic fault injection): same safe terminal shape as 429 exhaustion.",
+      "customer_id": "NEO-88213",
+      "fault": "chat_529",
+      "turns": [
+        {"message": "Quel est le prix de l'abonnement fibre ?"}
+      ],
+      "expect": {
+        "route": "billing",
+        "tools_include": ["customer_summary.read"],
+        "tools_exclude": ["appointments.book"],
+        "gate_flags": null,
+        "citations_present": true,
+        "reply_must": ["pas produire de réponse documentée", "conseiller"],
+        "reply_must_not": [],
+        "degraded_include": ["chat_model_unavailable"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    },
+    {
+      "id": "anonymous-session",
+      "category": "privacy",
+      "description": "Without a demo session: public-corpus answer and a generic human route, no scoped reads, no stored records, no private data.",
+      "customer_id": null,
+      "fault": null,
+      "turns": [
+        {"message": "Je veux résilier mon abonnement"}
+      ],
+      "expect": {
+        "route": "termination",
+        "tools_include": [],
+        "tools_exclude": ["customer_summary.read", "handoffs.create", "appointments.book"],
+        "gate_flags": null,
+        "citations_present": true,
+        "reply_must": ["conseiller"],
+        "reply_must_not": ["Numéro de dossier"],
+        "handoff_stored": false,
+        "booking_saved": false
+      }
+    }
+  ]
+}

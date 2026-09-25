@@ -1,0 +1,1137 @@
+{
+  "run": {
+    "mode": "offline",
+    "clock": {
+      "mode": "frozen",
+      "timestamp": "2026-08-26T12:00:00+02:00"
+    },
+    "chat_model": "FakeChatModel (offline double)",
+    "embedder": "FakeEmbedder (offline double)",
+    "classifier": "keyword fallback router",
+    "faults": "deterministic injection (api_500, chat_429, chat_529)",
+    "cases_total": 12
+  },
+  "summary": {
+    "passed": 12,
+    "failed": 0,
+    "total": 12,
+    "by_category": {
+      "routing": {
+        "passed": 1,
+        "total": 1
+      },
+      "grounding": {
+        "passed": 3,
+        "total": 3
+      },
+      "booking": {
+        "passed": 2,
+        "total": 2
+      },
+      "handoff": {
+        "passed": 2,
+        "total": 2
+      },
+      "resilience": {
+        "passed": 3,
+        "total": 3
+      },
+      "privacy": {
+        "passed": 1,
+        "total": 1
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "internet-incident",
+      "category": "routing",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "internet",
+          "observed": "internet"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read",
+            "incidents.read"
+          ],
+          "observed": [
+            "customer_summary.read",
+            "incidents.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book",
+            "handoffs.create"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "Numéro de dossier"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "internet",
+        "routes": [
+          "internet"
+        ],
+        "tools_called": [
+          "customer_summary.read",
+          "incidents.read"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "invoice-without-line-items",
+      "category": "grounding",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "billing",
+          "observed": "billing"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "gate_flags",
+          "pass": true,
+          "expected": [
+            "invoice_line_items_absent"
+          ],
+          "observed": [
+            "invoice_line_items_absent"
+          ]
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "pas accès au détail"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "votre facture s'élève à",
+            "montant exact de"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "billing",
+        "routes": [
+          "billing"
+        ],
+        "tools_called": [
+          "customer_summary.read"
+        ],
+        "gate_flag_codes": [
+          "invoice_line_items_absent"
+        ],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "price-current-vs-archive",
+      "category": "grounding",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "billing",
+          "observed": "billing"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "gate_flags",
+          "pass": true,
+          "expected": [
+            "archived_pricing"
+          ],
+          "observed": [
+            "archived_pricing",
+            "non_contractual_source"
+          ]
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "offre archivée de 2024"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "billing",
+        "routes": [
+          "billing"
+        ],
+        "tools_called": [
+          "customer_summary.read"
+        ],
+        "gate_flag_codes": [
+          "archived_pricing",
+          "non_contractual_source"
+        ],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "fee-timing-contradiction",
+      "category": "grounding",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "billing",
+          "observed": "billing"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "gate_flags",
+          "pass": true,
+          "expected": [
+            "fee_timing_conflict"
+          ],
+          "observed": [
+            "fee_timing_conflict"
+          ]
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "se contredisent"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "billing",
+        "routes": [
+          "billing"
+        ],
+        "tools_called": [
+          "customer_summary.read"
+        ],
+        "gate_flag_codes": [
+          "fee_timing_conflict"
+        ],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "moving-booking-success",
+      "category": "booking",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "moving",
+          "observed": "moving"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read",
+            "slots.read",
+            "appointments.book"
+          ],
+          "observed": [
+            "customer_summary.read",
+            "slots.read",
+            "appointments.book"
+          ]
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "Rendez-vous confirmé",
+            "Numéro de dossier"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": true,
+          "observed": true
+        }
+      ],
+      "observed": {
+        "route": "booking",
+        "routes": [
+          "moving",
+          "booking",
+          "booking"
+        ],
+        "tools_called": [
+          "customer_summary.read",
+          "slots.read",
+          "appointments.book"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 0,
+        "handoff_stored": false,
+        "booking_saved": true,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "booking-bad-slot",
+      "category": "booking",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "booking",
+          "observed": "booking"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read",
+            "slots.read"
+          ],
+          "observed": [
+            "customer_summary.read",
+            "slots.read",
+            "slots.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "pas disponible"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "Rendez-vous confirmé"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "booking",
+        "routes": [
+          "booking",
+          "booking",
+          "booking"
+        ],
+        "tools_called": [
+          "customer_summary.read",
+          "slots.read",
+          "slots.read"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 0,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "termination-handoff",
+      "category": "handoff",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "termination",
+          "observed": "termination"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "handoffs.create"
+          ],
+          "observed": [
+            "handoffs.create"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "solde de votre compte",
+            "balance_due"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": true,
+          "observed": true
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "termination",
+        "routes": [
+          "termination"
+        ],
+        "tools_called": [
+          "handoffs.create"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": true,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "sensitive-immediate-handoff",
+      "category": "handoff",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "sensitive",
+          "observed": "sensitive"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "handoffs.create"
+          ],
+          "observed": [
+            "handoffs.create"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "customer_summary.read",
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": false,
+          "observed": 0
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": true,
+          "observed": true
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "sensitive",
+        "routes": [
+          "sensitive"
+        ],
+        "tools_called": [
+          "handoffs.create"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 0,
+        "handoff_stored": true,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "api-500-read-recovery",
+      "category": "resilience",
+      "fault": "api_500",
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "internet",
+          "observed": "internet"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read",
+            "incidents.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": false,
+          "observed": 0
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "pas pu consulter votre dossier",
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "Rendez-vous confirmé"
+          ],
+          "observed": []
+        },
+        {
+          "check": "degraded_include",
+          "pass": true,
+          "expected": [
+            "api_read_failed"
+          ],
+          "observed": [
+            "api_read_failed",
+            "search_skipped_read_failure",
+            "api_read_failed_essential"
+          ]
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "internet",
+        "routes": [
+          "internet"
+        ],
+        "tools_called": [
+          "customer_summary.read",
+          "incidents.read"
+        ],
+        "gate_flag_codes": [],
+        "degraded": [
+          "api_read_failed",
+          "search_skipped_read_failure",
+          "api_read_failed_essential"
+        ],
+        "citations_count": 0,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    },
+    {
+      "id": "openrouter-429-exhaustion",
+      "category": "resilience",
+      "fault": "chat_429",
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "billing",
+          "observed": "billing"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "pas produire de réponse documentée",
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "degraded_include",
+          "pass": true,
+          "expected": [
+            "chat_model_unavailable"
+          ],
+          "observed": [
+            "chat_model_unavailable"
+          ]
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "billing",
+        "routes": [
+          "billing"
+        ],
+        "tools_called": [
+          "customer_summary.read"
+        ],
+        "gate_flag_codes": [
+          "archived_pricing"
+        ],
+        "degraded": [
+          "chat_model_unavailable"
+        ],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 3
+      },
+      "analysis": ""
+    },
+    {
+      "id": "openrouter-529-overload",
+      "category": "resilience",
+      "fault": "chat_529",
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "billing",
+          "observed": "billing"
+        },
+        {
+          "check": "tools_include",
+          "pass": true,
+          "expected": [
+            "customer_summary.read"
+          ],
+          "observed": [
+            "customer_summary.read"
+          ]
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "pas produire de réponse documentée",
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "degraded_include",
+          "pass": true,
+          "expected": [
+            "chat_model_unavailable"
+          ],
+          "observed": [
+            "chat_model_unavailable"
+          ]
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "billing",
+        "routes": [
+          "billing"
+        ],
+        "tools_called": [
+          "customer_summary.read"
+        ],
+        "gate_flag_codes": [
+          "archived_pricing"
+        ],
+        "degraded": [
+          "chat_model_unavailable"
+        ],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 3
+      },
+      "analysis": ""
+    },
+    {
+      "id": "anonymous-session",
+      "category": "privacy",
+      "fault": null,
+      "pass": true,
+      "checks": [
+        {
+          "check": "route",
+          "pass": true,
+          "expected": "termination",
+          "observed": "termination"
+        },
+        {
+          "check": "tools_exclude",
+          "pass": true,
+          "expected": [
+            "customer_summary.read",
+            "handoffs.create",
+            "appointments.book"
+          ],
+          "observed": []
+        },
+        {
+          "check": "citations",
+          "pass": true,
+          "expected": true,
+          "observed": 3
+        },
+        {
+          "check": "reply_must",
+          "pass": true,
+          "expected": [
+            "conseiller"
+          ],
+          "observed": []
+        },
+        {
+          "check": "reply_must_not",
+          "pass": true,
+          "expected": [
+            "Numéro de dossier"
+          ],
+          "observed": []
+        },
+        {
+          "check": "handoff_stored",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        },
+        {
+          "check": "booking_saved",
+          "pass": true,
+          "expected": false,
+          "observed": false
+        }
+      ],
+      "observed": {
+        "route": "termination",
+        "routes": [
+          "termination"
+        ],
+        "tools_called": [],
+        "gate_flag_codes": [],
+        "degraded": [],
+        "citations_count": 3,
+        "handoff_stored": false,
+        "booking_saved": false,
+        "provider_attempts": 0
+      },
+      "analysis": ""
+    }
+  ],
+  "retrieval_comparison": {
+    "Quel est le prix actuel et le tarif archive de la grille 2024 ?": {
+      "semantic": [
+        "promo-rentree-2024",
+        "grille-tarifaire-2026",
+        "fiche-roaming-international-scan"
+      ],
+      "fts": [
+        "promo-rentree-2024",
+        "grille-tarifaire-2026",
+        "fiche-roaming-international-scan"
+      ],
+      "hybrid": [
+        "promo-rentree-2024",
+        "grille-tarifaire-2026",
+        "fiche-roaming-international-scan"
+      ],
+      "agreement_with_hybrid_top3": {
+        "semantic": 3,
+        "fts": 3
+      }
+    },
+    "Des frais de rejet de prélèvement s'appliquent à quel moment ?": {
+      "semantic": [
+        "faq-facturation",
+        "faq-espace-client",
+        "cgv-resiliation"
+      ],
+      "fts": [
+        "faq-facturation",
+        "faq-espace-client",
+        "grille-tarifaire-2026"
+      ],
+      "hybrid": [
+        "faq-facturation",
+        "faq-espace-client",
+        "grille-tarifaire-2026"
+      ],
+      "agreement_with_hybrid_top3": {
+        "semantic": 2,
+        "fts": 3
+      }
+    },
+    "Roaming international : mes données depuis l'étranger sont-elles incluses ?": {
+      "semantic": [],
+      "fts": [
+        "fiche-roaming-international-scan",
+        "faq-retour-equipement",
+        "grille-tarifaire-2026"
+      ],
+      "hybrid": [
+        "fiche-roaming-international-scan",
+        "faq-retour-equipement",
+        "grille-tarifaire-2026"
+      ],
+      "agreement_with_hybrid_top3": {
+        "semantic": 0,
+        "fts": 3
+      }
+    },
+    "frais de mise en service": {
+      "semantic": [
+        "cgv-resiliation",
+        "procedure-demenagement",
+        "faq-facturation"
+      ],
+      "fts": [
+        "faq-facturation",
+        "faq-facturation",
+        "faq-espace-client"
+      ],
+      "hybrid": [
+        "faq-facturation",
+        "cgv-resiliation",
+        "procedure-demenagement"
+      ],
+      "agreement_with_hybrid_top3": {
+        "semantic": 3,
+        "fts": 1
+      }
+    }
+  }
+}
