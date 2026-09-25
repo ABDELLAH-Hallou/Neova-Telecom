@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .. import conversation
+from .. import conversation, observability
 from ..classifier import Classification, classify_message, trace
 
 if TYPE_CHECKING:
@@ -63,6 +63,17 @@ def _classify_with_fallback(
 
 
 def classify_node(state: GraphState) -> GraphState:
+    """Thin wrapper: one ``classify-intent`` observation (no-op when off)."""
+    with observability.step("classify-intent", input=state["input"]) as obs:
+        result = _classify_node(state)
+        obs.update(
+            output=str(result.get("route", "")),
+            metadata={"classification_source": str(
+                (result.get("classifier") or {}).get("source", ""))})
+        return result
+
+
+def _classify_node(state: GraphState) -> GraphState:
     message = state["input"]
     steps = state.get("steps", 0) + 1
     token = state.get("session_token")

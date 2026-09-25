@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .. import tools
+from .. import observability, tools
 from ..tools import ToolError
 
 if TYPE_CHECKING:
@@ -59,36 +59,48 @@ def gather_node(state: GraphState) -> GraphState:
 
     # Context read: the mandatory Pro-contract check on business routes.
     if customer and token and route != "termination":
-        try:
-            summary = tools.get_summary(token, customer)
-            summary.pop("customer_id", None)  # no identifiers in the prompt
-            tools_called.append("customer_summary.read")
-            api_values["summary"] = summary
-            if "pro" in str(summary.get("plan", "")).lower():
-                updates["route"] = "sensitive_pro"
-                updates["handoff"] = {
-                    "topic": "client Pro",
-                    "topic_label": "contrat professionnel",
-                    "urgency": "normal", "category": "other",
-                }
-                return updates
-        except ToolError as error:
-            api_values["summary_error"] = error.detail
-            api_values["read_failure"] = {
-                "read": "customer_summary", "status": error.status_code,
-                "detail": error.detail}
-            degraded.append("api_read_failed")
+        tools_called.append("customer_summary.read")  # attempted, even if exhausted
+        with observability.step(
+                "read-customer-summary", as_type="tool") as read_obs:
+            try:
+                summary = tools.get_summary(token, customer)
+                summary.pop("customer_id", None)  # no identifiers in the prompt
+                read_obs.update(output="ok",
+                                metadata={"tool": "customer_summary.read"})
+                api_values["summary"] = summary
+            except ToolError as error:
+                read_obs.update(output=f"failed:{error.status_code}",
+                                metadata={"tool": "customer_summary.read"})
+                api_values["summary_error"] = error.detail
+                api_values["read_failure"] = {
+                    "read": "customer_summary", "status": error.status_code,
+                    "detail": error.detail}
+                degraded.append("api_read_failed")
+            else:
+                if "pro" in str(api_values.get("summary", {}).get(
+                        "plan", "")).lower():
+                    updates["route"] = "sensitive_pro"
+                    updates["handoff"] = {
+                        "topic": "client Pro",
+                        "topic_label": "contrat professionnel",
+                        "urgency": "normal", "category": "other",
+                    }
+                    return updates
 
     if route == "internet" and token and customer:
-        try:
-            api_values["incidents"] = tools.get_incidents(token)
-            tools_called.append("incidents.read")
-        except ToolError as error:
-            api_values["incidents_error"] = error.detail
-            api_values["read_failure"] = {
-                "read": "incidents", "status": error.status_code,
-                "detail": error.detail}
-            degraded.append("api_read_failed")
+        tools_called.append("incidents.read")  # attempted, even if exhausted
+        with observability.step("read-incidents", as_type="tool") as read_obs:
+            try:
+                api_values["incidents"] = tools.get_incidents(token)
+                read_obs.update(output="ok", metadata={"tool": "incidents.read"})
+            except ToolError as error:
+                read_obs.update(output=f"failed:{error.status_code}",
+                                metadata={"tool": "incidents.read"})
+                api_values["incidents_error"] = error.detail
+                api_values["read_failure"] = {
+                    "read": "incidents", "status": error.status_code,
+                    "detail": error.detail}
+                degraded.append("api_read_failed")
 
     # A failed essential read ends the turn here: the retrieval pass is
     # skipped entirely so no embedding credit is spent on a turn that
@@ -99,13 +111,23 @@ def gather_node(state: GraphState) -> GraphState:
 
     # At most one retrieval pass; unconfigured embedder degrades to FTS5.
     embed = embedder_factory()
-    try:
-        outcome = tools.search_public(
-            state["input"][:MAX_PROMPT_CHARS], embed_fn=embed,
-            mode="hybrid" if embed else "fts")
-    except Exception:
-        outcome = None
-        degraded.append("search_unavailable")
+    retrieval_mode = "hybrid" if embed else "fts"
+    with observability.step("retrieve-context", as_type="retriever",
+                            input=state["input"][:MAX_PROMPT_CHARS]) as retrieval_obs:
+        try:
+            outcome = tools.search_public(
+                state["input"][:MAX_PROMPT_CHARS], embed_fn=embed,
+                mode=retrieval_mode)
+        except Exception:
+            outcome = None
+            degraded.append("search_unavailable")
+        if outcome is not None:
+            retrieval_obs.update(
+                output=str(len(outcome.results)),
+                metadata={"mode": retrieval_mode,
+                          "degraded": ",".join(outcome.degraded) or "none",
+                          "sources": ",".join(
+                              passage.source_id for passage in outcome.results)})
     if outcome is not None:
         updates["citations"] = [_citation(passage) for passage in outcome.results]
         updates["gate_flags"] = outcome.gate_flags

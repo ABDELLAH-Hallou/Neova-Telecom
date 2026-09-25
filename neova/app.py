@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 
-from . import customer_api, db, usage
+from . import customer_api, db, observability, usage
 from .dto import (
     AgentChatRequest,
     AgentChatResult,
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         yield # running
     finally:
         close_session_connections()
+        observability.shutdown()  # flush and release any Langfuse client
         app.state.db_ready = False # shutdown
 
 

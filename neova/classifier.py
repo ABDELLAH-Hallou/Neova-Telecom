@@ -19,11 +19,12 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-import openai
-from openai import OpenAI
+import openai  # exception classes for the OpenRouter transport
+from openai import OpenAI  # default client class; tests patch this seam
+
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from . import provider, usage
+from . import observability, provider, usage
 from .config import (
     get_chat_fallback_model,
     get_classifier_model,
@@ -109,8 +110,14 @@ def openrouter_classifier():
     through the shared bounded retry/fallback policy
     (``neova.provider``): the underlying client keeps ``max_retries=0``
     so this policy is the only retry layer.
+
+    With Langfuse tracing enabled the client class is the
+    ``langfuse.openai`` drop-in, so the classification call is captured
+    as a ``classify-intent`` generation; otherwise the module-level
+    ``OpenAI`` class is used (the test patch point).
     """
-    client = OpenAI(
+    client = (observability.openai_client_class() if observability.enabled()
+              else OpenAI)(
         api_key=require_openrouter_api_key(),
         base_url=get_openrouter_base_url(),
         timeout=CLASSIFIER_TIMEOUT_SECONDS,
@@ -143,6 +150,7 @@ def openrouter_classifier():
             fallback_model=get_chat_fallback_model(),
             temperature=0,
             max_tokens=MAX_TOKENS,
+            name="classify-intent",
             response_format={
                 "type": "json_schema",
                 "json_schema": {

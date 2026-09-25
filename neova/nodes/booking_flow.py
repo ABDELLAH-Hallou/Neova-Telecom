@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .. import conversation, tools
+from .. import conversation, observability, tools
 from ..tools import ToolError
 
 if TYPE_CHECKING:
@@ -59,13 +59,19 @@ def _reason_label(reason_id: str | None) -> str:
 
 def _offer_slots(state: GraphState, token: str, customer: str,
                  tools_called: list) -> GraphState:
-    try:
-        slots = tools.get_slots(token, customer)
-        tools_called.append("slots.read")
-    except ToolError as error:
-        return {"tools_called": tools_called,
-                "reply": f"Je n'ai pas pu consulter les créneaux ({error.detail}). "
-                         f"{_READ_FAILURE_SUFFIX}"}
+    with observability.step(
+            "read-technician-slots", as_type="tool") as read_obs:
+        try:
+            slots = tools.get_slots(token, customer)
+            tools_called.append("slots.read")
+            read_obs.update(output=str(len(slots)),
+                            metadata={"tool": "slots.read"})
+        except ToolError as error:
+            read_obs.update(output=f"failed:{error.status_code}",
+                            metadata={"tool": "slots.read"})
+            return {"tools_called": tools_called,
+                    "reply": f"Je n'ai pas pu consulter les créneaux ({error.detail}). "
+                             f"{_READ_FAILURE_SUFFIX}"}
     offered = [
         {"slot_id": slot["slot_id"], "start": slot["start"], "end": slot["end"],
          "label": conversation.slot_label(slot["start"], slot["end"])}
@@ -91,10 +97,17 @@ def _recover_by_key(state: GraphState, token: str, customer: str, key: str,
       phrase are required before any new attempt.
     """
     tools_called.append("appointments.by_key")
-    try:
-        saved = tools.appointment_by_key(token, customer, key)
-    except ToolError:
-        saved = None  # the check itself failed: no claim either way
+    with observability.step(
+            "check-booking-by-key", as_type="tool") as check_obs:
+        try:
+            saved = tools.appointment_by_key(token, customer, key)
+            read_obs_output = "saved" if saved and saved.get(
+                "appointment_id") else "absent"
+        except ToolError:
+            saved = None  # the check itself failed: no claim either way
+            read_obs_output = "failed"
+        check_obs.update(output=read_obs_output,
+                         metadata={"tool": "appointments.by_key"})
     if saved and saved.get("appointment_id"):
         conversation.clear(token)
         return {"tools_called": tools_called,
@@ -113,20 +126,26 @@ def _execute_booking(state: GraphState, pending: conversation.PendingBooking,
     key = conversation.confirmation_key(
         pending.customer_id, pending.slot_id, pending.reason_id)
     tools_called.append("appointments.book")  # recorded even on failure
-    try:
-        result = tools.book_appointment(
-            token, customer, pending.slot_id, pending.reason_id, key)
-    except ToolError as error:
-        if error.status_code == 409:
-            conversation.clear(token)
-            return {"tools_called": tools_called, "reply": _CONFLICT_REPLY}
-        if error.status_code in _BOOKING_UNKNOWN_STATUSES:
-            # Outcome unknown: verify by key instead of claiming failure.
-            return _recover_by_key(state, token, customer, key,
-                                   pending.slot_label, tools_called)
-        return {"tools_called": tools_called,
-                "reply": f"Le rendez-vous n'a pas pu être enregistré "
-                         f"({error.detail}). Aucun rendez-vous n'a été créé."}
+    with observability.step("book-appointment", as_type="tool") as booking_obs:
+        try:
+            result = tools.book_appointment(
+                token, customer, pending.slot_id, pending.reason_id, key)
+            booking_obs.update(output=f"saved:{result.get('appointment_id')}",
+                               metadata={"tool": "appointments.book",
+                                         "replayed": str(bool(result.get("replayed")))})
+        except ToolError as error:
+            booking_obs.update(output=f"failed:{error.status_code}",
+                               metadata={"tool": "appointments.book"})
+            if error.status_code == 409:
+                conversation.clear(token)
+                return {"tools_called": tools_called, "reply": _CONFLICT_REPLY}
+            if error.status_code in _BOOKING_UNKNOWN_STATUSES:
+                # Outcome unknown: verify by key instead of claiming failure.
+                return _recover_by_key(state, token, customer, key,
+                                       pending.slot_label, tools_called)
+            return {"tools_called": tools_called,
+                    "reply": f"Le rendez-vous n'a pas pu être enregistré "
+                             f"({error.detail}). Aucun rendez-vous n'a été créé."}
     conversation.clear(token)
     if result.get("replayed"):
         reply = (f"Un rendez-vous existe déjà pour ce créneau et ce motif "
@@ -174,10 +193,20 @@ def booking_flow_node(state: GraphState) -> GraphState:
     # 2. First booking turn on the direct booking route: mandatory
     #    Pro-contract context read, then start the pending state.
     if pending is None and state.get("route") == "booking":
-        try:
-            summary = tools.get_summary(token, customer)
-            summary.pop("customer_id", None)  # no identifiers in the prompt
-            tools_called.append("customer_summary.read")
+        with observability.step(
+                "read-customer-summary", as_type="tool") as read_obs:
+            try:
+                summary = tools.get_summary(token, customer)
+                summary.pop("customer_id", None)  # no identifiers in the prompt
+                tools_called.append("customer_summary.read")
+                read_obs.update(output="ok",
+                                metadata={"tool": "customer_summary.read"})
+            except ToolError as error:
+                read_obs.update(output=f"failed:{error.status_code}",
+                                metadata={"tool": "customer_summary.read"})
+                updates["reply"] = (f"Je n'ai pas pu consulter votre dossier "
+                                    f"({error.detail}). {_READ_FAILURE_SUFFIX}")
+                return updates
             if "pro" in str(summary.get("plan", "")).lower():
                 updates["route"] = "sensitive_pro"
                 updates["handoff"] = {
@@ -186,10 +215,6 @@ def booking_flow_node(state: GraphState) -> GraphState:
                     "urgency": "normal", "category": "other",
                 }
                 return updates
-        except ToolError as error:
-            updates["reply"] = (f"Je n'ai pas pu consulter votre dossier "
-                                f"({error.detail}). {_READ_FAILURE_SUFFIX}")
-            return updates
         pending = conversation.start(token, customer)
 
     # 3. Deterministic updates from the user message (change clears confirmation).
