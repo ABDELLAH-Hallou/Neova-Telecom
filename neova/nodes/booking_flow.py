@@ -4,7 +4,10 @@ The confirmation gate is ``neova.conversation``: only an explicit French
 affirmative in the *user's* message to the exact slot+reason pair arms
 the booking; a model-generated "yes" can never do so. Changing slot or
 reason voids the confirmation; ``rendez-vous confirmé`` is emitted only
-after a successful API result with a saved appointment ID.
+after a successful API result with a saved appointment ID. A booking
+that fails with 500/timeout is never blindly replayed: the graph checks
+by idempotency key — a saved ID confirms, otherwise the state stays
+*unconfirmed*, the code is voided and a fresh check is required.
 """
 
 from __future__ import annotations
@@ -39,6 +42,15 @@ _REFUSED = ("D'accord, je n'enregistre aucun rendez-vous : la proposition "
 _CONFLICT_REPLY = ("Ce créneau vient d'être pris ou n'est plus disponible. "
                    "Le rendez-vous n'a pas été enregistré. Souhaitez-vous "
                    "choisir un autre créneau ?")
+_READ_FAILURE_SUFFIX = "Souhaitez-vous être mis en relation avec un conseiller ?"
+# State-changing call failed with 500/timeout: the write may or may not have
+# reached the store, so nothing is claimed without the by-key check.
+_UNCONFIRMED_REPLY = (
+    "Le rendez-vous n'a pas pu être confirmé pour le moment : je ne peux pas "
+    "vous dire s'il a été enregistré. Aucune confirmation ne vaut sans "
+    "vérification. Souhaitez-vous être mis en relation avec un conseiller ?")
+# Server-side failure statuses that leave the write outcome unknown.
+_BOOKING_UNKNOWN_STATUSES = {500, 502, 503, 504}
 
 
 def _reason_label(reason_id: str | None) -> str:
@@ -53,7 +65,7 @@ def _offer_slots(state: GraphState, token: str, customer: str,
     except ToolError as error:
         return {"tools_called": tools_called,
                 "reply": f"Je n'ai pas pu consulter les créneaux ({error.detail}). "
-                         "Merci de réessayer."}
+                         f"{_READ_FAILURE_SUFFIX}"}
     offered = [
         {"slot_id": slot["slot_id"], "start": slot["start"], "end": slot["end"],
          "label": conversation.slot_label(slot["start"], slot["end"])}
@@ -67,6 +79,31 @@ def _offer_slots(state: GraphState, token: str, customer: str,
         lines.append(f"{index}) {item['label']}")
     lines.append(_ASK_SLOT_CHOICE)
     return {"tools_called": tools_called, "reply": "\n".join(lines)}
+
+
+def _recover_by_key(state: GraphState, token: str, customer: str, key: str,
+                    slot_label: str, tools_called: list) -> GraphState:
+    """After a 500/timeout write: verify by idempotency key, never replay.
+
+    - a saved appointment proves the write: confirmed (replayed wording);
+    - absent or a failed check: say *unconfirmed*, offer the handoff and
+      void the offered code so a fresh check and a fresh confirmation
+      phrase are required before any new attempt.
+    """
+    tools_called.append("appointments.by_key")
+    try:
+        saved = tools.appointment_by_key(token, customer, key)
+    except ToolError:
+        saved = None  # the check itself failed: no claim either way
+    if saved and saved.get("appointment_id"):
+        conversation.clear(token)
+        return {"tools_called": tools_called,
+                "reply": (f"Un rendez-vous existe déjà pour ce créneau et ce "
+                          f"motif ({slot_label}). Numéro de dossier : "
+                          f"{saved['appointment_id']}."),
+                "handoff_id": state.get("handoff_id")}
+    conversation.void_confirmation(token)
+    return {"tools_called": tools_called, "reply": _UNCONFIRMED_REPLY}
 
 
 def _execute_booking(state: GraphState, pending: conversation.PendingBooking,
@@ -83,6 +120,10 @@ def _execute_booking(state: GraphState, pending: conversation.PendingBooking,
         if error.status_code == 409:
             conversation.clear(token)
             return {"tools_called": tools_called, "reply": _CONFLICT_REPLY}
+        if error.status_code in _BOOKING_UNKNOWN_STATUSES:
+            # Outcome unknown: verify by key instead of claiming failure.
+            return _recover_by_key(state, token, customer, key,
+                                   pending.slot_label, tools_called)
         return {"tools_called": tools_called,
                 "reply": f"Le rendez-vous n'a pas pu être enregistré "
                          f"({error.detail}). Aucun rendez-vous n'a été créé."}
@@ -147,7 +188,7 @@ def booking_flow_node(state: GraphState) -> GraphState:
                 return updates
         except ToolError as error:
             updates["reply"] = (f"Je n'ai pas pu consulter votre dossier "
-                                f"({error.detail}). Merci de réessayer.")
+                                f"({error.detail}). {_READ_FAILURE_SUFFIX}")
             return updates
         pending = conversation.start(token, customer)
 

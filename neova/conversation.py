@@ -189,6 +189,22 @@ class ConversationStore:
             self._pending[key] = booking
             return booking
 
+    def void_confirmation(self, token: str) -> None:
+        """Void the offered code without dropping the pending pair.
+
+        Used after an unconfirmed state-changing call (issue #6): the
+        pair stays so the flow can continue, but confirmation is no
+        longer armed and the old code phrase is dead — a fresh proposal
+        (and a fresh check) is required before any new attempt.
+        """
+        with self._lock:
+            booking = self._pending.get(self._key(token))
+            if booking is None:
+                return
+            self._pending[self._key(token)] = replace(
+                booking, proposed=False, code=None, proposed_at=None,
+                expired=True, previous_code=booking.code or booking.previous_code)
+
     def set_offered(self, token: str, offered: list[dict]) -> None:
         with self._lock:
             self._offered[self._key(token)] = list(offered)
@@ -230,6 +246,11 @@ def update(token: str, *, slot_id: str | None = None,
 
 def mark_proposed(token: str) -> PendingBooking | None:
     return _store.mark_proposed(token)
+
+
+def void_confirmation(token: str) -> None:
+    """Void the offered code after an unconfirmed state-changing call."""
+    _store.void_confirmation(token)
 
 
 def set_offered(token: str, offered: list[dict]) -> None:

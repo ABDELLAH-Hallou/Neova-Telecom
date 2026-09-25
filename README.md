@@ -23,7 +23,7 @@ The API requires `DATABASE_URL`, which is already defined in `.env.example`:
 DATABASE_URL=sqlite:///./neova.db
 ```
 
-The conversation graph and the optional `/models/chat` endpoint require `OPENROUTER_API_KEY` and `CHAT_MODEL` for OpenRouter, or `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` for OpenAI. The customer API routes and the booking flow run without either key.
+The conversation graph requires `OPENROUTER_API_KEY`, `CHAT_MODEL` and `CHAT_FALLBACK_MODEL` (verified fallback route) for the model calls; `EMBEDDING_MODEL` for corpus indexing. The customer API routes and the booking flow run without any key.
 
 Start the server:
 
@@ -52,7 +52,6 @@ Stop the server with `Ctrl+C`.
 | `GET` | `/health` | Check API and database startup |
 | `POST` | `/demo/sessions` | Create a local session for a fixture customer |
 | `POST` | `/agent/chat` | One bounded conversation turn (French agent; optional `X-Demo-Session`) |
-| `POST` | `/models/chat` | Call either configured chat provider directly |
 | `GET` | `/customers/{id}/summary` | Session customer's minimal account summary |
 | `GET` | `/incidents` | Linked and area-only incidents (scope clearly labeled) |
 | `GET` | `/slots?customer_id=...` | Future, available slots covering the session customer's postcode |
@@ -60,7 +59,7 @@ Stop the server with `Ctrl+C`.
 | `GET` | `/appointments/by-key/{key}` | Look up only the session customer's saved booking |
 | `POST` | `/handoffs` | Save a minimal human-handoff record and return its ID |
 
-To call a model, POST `{"provider":"openrouter","prompt":"Bonjour"}` or `{"provider":"openai","prompt":"Bonjour"}` to `/models/chat`.
+Model calls belong to the conversation graph only (`/agent/chat`): there is no direct model endpoint.
 
 Test the health endpoint:
 
@@ -144,8 +143,7 @@ main.py
 FastAPI
    ├── health endpoint
    ├── demo-session endpoint
-   ├── /agent/chat → bounded LangGraph (neova/graph.py + neova/nodes/)
-   └── /models/chat (direct model call)
+   └── /agent/chat → bounded LangGraph (neova/graph.py + neova/nodes/)
            │
            ▼
         SQLite
@@ -195,7 +193,7 @@ Timestamps without timezone information are rejected for booking validation.
 Run the offline tests:
 
 ```bash
-uv run --locked --extra dev python -m pytest tests/test_conversation.py tests/test_customer_api.py tests/test_foundation.py tests/test_models.py tests/test_retrieval.py -q
+uv run --locked --extra dev python -m pytest tests -q
 ```
 
 The tests cover:
@@ -213,6 +211,7 @@ The tests cover:
 - Scoped customer reads, transactional booking, replay/concurrent claims and durable handoffs
 - Hybrid retrieval, evidence gate and citations over the public corpus
 - Bounded conversation routes, multi-turn booking confirmation, handoffs and privacy behavior
+- Bounded provider retries/fallback, tool timeout, booking by-key recovery and the redacted usage ledger (offline, fault-injected)
 
 The tests use temporary databases and make no network or OpenRouter requests.
 
@@ -220,10 +219,10 @@ The tests use temporary databases and make no network or OpenRouter requests.
 
 Not yet implemented:
 
-- Provider retries, fallback and spend logging for model/embedding calls
 - Human queue integration beyond stored handoff records
 - Fixed evaluation set with measured results
 - Model-backed live tracing (Langfuse)
+- Live verification of the fallback route's upstream provider (`python -m neova.provider --verify`, publication-time; needs key budget)
 
 The demo session is not production authentication. A real system would use an external identity provider and create a trusted principal after verifying the customer.
 
