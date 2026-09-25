@@ -35,9 +35,9 @@ from types import SimpleNamespace
 from typing import Callable
 
 import openai
-from openai import OpenAI
+from openai import OpenAI  # offline fallback; see observability.openai_client_class
 
-from . import usage
+from . import observability, usage
 from .config import (
     get_chat_fallback_model,
     get_openrouter_base_url,
@@ -166,8 +166,14 @@ def retry_delay(retry_after: float | None, attempt: int,
 
 
 def openrouter_transport() -> Transport:
-    """Build the OpenRouter chat transport used in production."""
-    client = OpenAI(
+    """Build the OpenRouter chat transport used in production.
+
+    The client class is the ``langfuse.openai`` drop-in when tracing is
+    enabled (each call is captured as a generation nested under the
+    active step) and the plain OpenAI SDK otherwise — offline tests
+    never construct instrumentation.
+    """
+    client = observability.openai_client_class()(
         api_key=require_openrouter_api_key(),
         base_url=get_openrouter_base_url(),
         timeout=CHAT_TIMEOUT_SECONDS,
@@ -197,13 +203,14 @@ class PolicyChatModel:
     def __init__(self, *, kind: str = usage.KIND_CHAT, model: str | None = None,
                  fallback_model: str | None = None, temperature: float | None = None,
                  max_tokens: int | None = None, extra_body: dict | None = None,
+                 name: str | None = None,
                  transport: Transport | None = None,
                  sleeper: Sleeper | None = None, jitter: Jitter | None = None) -> None:
         self._kwargs = dict(
             kind=kind, model=model, fallback_model=fallback_model,
             temperature=temperature, max_tokens=max_tokens,
-            extra_body=extra_body, transport=transport, sleeper=sleeper,
-            jitter=jitter)
+            extra_body=extra_body, name=name, transport=transport,
+            sleeper=sleeper, jitter=jitter)
 
     def invoke(self, prompt: str) -> SimpleNamespace:
         result = chat_invoke(
@@ -233,10 +240,16 @@ def chat_invoke(
     model: str | None = None, fallback_model: str | None = None,
     temperature: float | None = 0.0, max_tokens: int | None = None,
     response_format: dict | None = None, extra_body: dict | None = None,
+    name: str | None = None,
     transport: Transport | None = None, sleeper: Sleeper | None = None,
     jitter: Jitter | None = None,
 ) -> ChatResult:
-    """Run one chat request under the bounded retry/fallback policy."""
+    """Run one chat request under the bounded retry/fallback policy.
+
+    ``name`` labels the Langfuse generation (e.g. ``generate-response``)
+    when tracing is enabled; the ``langfuse.openai`` drop-in consumes it
+    client-side so it never reaches the OpenRouter API body.
+    """
     routes = chat_routes(model, fallback_model)
     call = transport or openrouter_transport()
     wait = sleeper or time.sleep
@@ -250,6 +263,10 @@ def chat_invoke(
         request["response_format"] = response_format
     if extra_body is not None:
         request["extra_body"] = dict(extra_body)
+    # Only with the instrumented client class: a plain OpenAI request
+    # would reject the extra field, so tracing-off sends nothing.
+    if name and observability.enabled():
+        request["name"] = name
 
     attempts_total = 0
     for route_name, route_model in routes:

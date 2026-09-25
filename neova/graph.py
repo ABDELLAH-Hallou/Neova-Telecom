@@ -25,6 +25,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from . import observability
 from .nodes import (
     booking_flow_node,
     classify_node,
@@ -156,9 +157,21 @@ def run_conversation(message: str, history: list | None,
         "degraded": [],
         "steps": 0,
     }
-    result = conversation_compiled.invoke(initial)
-    if result.get("steps", 0) > MAX_STEPS:
-        raise RuntimeError("Conversation graph exceeded its bounded step count")
+    # One Langfuse trace per turn (no-op when tracing is off): the root
+    # observation carries the user message as input and the final
+    # French reply as output; route/classification land in metadata.
+    with observability.turn(session_token, message) as turn_observation:
+        result = conversation_compiled.invoke(initial)
+        if result.get("steps", 0) > MAX_STEPS:
+            raise RuntimeError(
+                "Conversation graph exceeded its bounded step count")
+        reply = result.get("reply", "")
+        turn_observation.update(
+            output=reply,
+            metadata={"route": str(result.get("route", "unknown")),
+                      "classification_source": str(
+                          (result.get("classifier") or {}).get("source", "")),
+                      "steps": str(result.get("steps", 0))})
     return {
         "reply": result.get("reply", ""),
         "route": result.get("route", "unknown"),

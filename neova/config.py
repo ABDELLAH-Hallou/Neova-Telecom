@@ -68,6 +68,42 @@ def get_usage_log_path() -> Optional[str]:
     return _get_env("USAGE_LOG")
 
 
+def get_langfuse_public_key() -> Optional[str]:
+    """Return the optional Langfuse public key, or None when unset."""
+    return _get_env("LANGFUSE_PUBLIC_KEY")
+
+
+def get_langfuse_secret_key() -> Optional[str]:
+    """Return the optional Langfuse secret key, or None when unset.
+
+    The value itself is only ever passed to the Langfuse client
+    constructor; it is never logged, recorded or returned elsewhere.
+    """
+    return _get_env("LANGFUSE_SECRET_KEY")
+
+
+def get_langfuse_host() -> str:
+    """Return the Langfuse server URL (EU cloud by default).
+
+    The application configuration names the server ``LANGFUSE_BASE_URL``
+    (as in ``.env.example``); the SDK-native ``LANGFUSE_HOST`` is also
+    accepted.
+    """
+    return (_get_env("LANGFUSE_BASE_URL")
+            or _get_env("LANGFUSE_HOST")
+            or "https://cloud.langfuse.com")
+
+
+def langfuse_tracing_enabled() -> bool:
+    """Return False only when tracing is explicitly switched off.
+
+    Tracing is enabled whenever both Langfuse keys are configured; the
+    SDK-native ``LANGFUSE_TRACING_ENABLED=false`` env var disables it
+    (used by the offline test suite to guarantee no network traffic).
+    """
+    return (_get_env("LANGFUSE_TRACING_ENABLED") or "").strip().lower() != "false"
+
+
 def require_openrouter_api_key() -> str:
     """Return the OpenRouter key; fail closed with a sanitized error."""
     return _require("OPENROUTER_API_KEY", "model calls via OpenRouter")

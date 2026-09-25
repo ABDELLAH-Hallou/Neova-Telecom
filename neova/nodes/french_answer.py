@@ -56,7 +56,8 @@ def answer_model():
         # bounds the response cost (retries are bounded by the policy).
         return PolicyChatModel(
             kind=usage.KIND_CHAT, max_tokens=ANSWER_MAX_TOKENS,
-            extra_body={"usage": {"include": True}})
+            extra_body={"usage": {"include": True}},
+            name="generate-response")
     except Exception:
         return None
 

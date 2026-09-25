@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .. import conversation, tools
+from .. import conversation, observability, tools
 from ..tools import ToolError
 
 if TYPE_CHECKING:
@@ -40,17 +40,22 @@ def handoff_node(state: GraphState) -> GraphState:
         f"Ce type de demande ({topic}) est traitée par un conseiller."]
     summary = conversation.handoff_summary(topic, state["input"])
     tools_called.append("handoffs.create")  # recorded even on failure
-    try:
-        result = tools.create_handoff(
-            token, handoff.get("category", "other"), summary,
-            handoff.get("urgency", "normal"))
-        lines.append(f"Votre demande a été transmise (référence de suivi : "
-                     f"{result['handoff_id']}). Un conseiller prendra le relais.")
-        return {"reply": "\n".join(lines),
-                "handoff_id": result["handoff_id"],
-                "tools_called": tools_called, "steps": steps}
-    except ToolError:
-        lines.append("La transmission à un conseiller n'a pas abouti pour le "
-                     "moment. Merci de réessayer.")
-        return {"reply": "\n".join(lines), "handoff_id": None,
-                "tools_called": tools_called, "steps": steps}
+    with observability.step("create-handoff", as_type="tool") as handoff_obs:
+        try:
+            result = tools.create_handoff(
+                token, handoff.get("category", "other"), summary,
+                handoff.get("urgency", "normal"))
+            handoff_obs.update(output=f"stored:{result['handoff_id']}",
+                               metadata={"tool": "handoffs.create"})
+            lines.append(f"Votre demande a été transmise (référence de suivi : "
+                         f"{result['handoff_id']}). Un conseiller prendra le relais.")
+            return {"reply": "\n".join(lines),
+                    "handoff_id": result["handoff_id"],
+                    "tools_called": tools_called, "steps": steps}
+        except ToolError:
+            handoff_obs.update(output="failed",
+                               metadata={"tool": "handoffs.create"})
+            lines.append("La transmission à un conseiller n'a pas abouti pour le "
+                         "moment. Merci de réessayer.")
+            return {"reply": "\n".join(lines), "handoff_id": None,
+                    "tools_called": tools_called, "steps": steps}
