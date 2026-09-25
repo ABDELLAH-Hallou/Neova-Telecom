@@ -82,16 +82,29 @@ This requires `OPENROUTER_API_KEY` and `EMBEDDING_MODEL`. It is protected by a r
 ## Architecture
 
 ```mermaid
-flowchart LR
-    U[Customer] --> API[FastAPI]
-    API --> G[Bounded LangGraph]
-    G --> R[Public retrieval]
-    R --> F[FTS5]
-    R -. optional .-> V[Cached embeddings]
-    G --> T[Scoped customer tools]
-    T --> DB[(SQLite)]
-    G -. optional .-> OR[OpenRouter]
-    G --> H[Answer, booking or handoff]
+flowchart TD
+    U[Customer] --> API[FastAPI /agent/chat]
+    API --> G[Security and privacy guards]
+    G --> R{Bounded LangGraph routing}
+
+    R -->|Support question| RET[Hybrid public retrieval]
+    F[SQLite FTS5] --> RET
+    V[Cached semantic vectors] --> RET
+    RET --> A[Grounded French answer]
+
+    R -->|Technician appointment| T[Customer API tools]
+    T --> DB[(SQLite bookings and customer data)]
+
+    R -->|Sensitive or unsupported| H[Human handoff]
+    H --> DB
+
+    OR[(OpenRouter models)] -. classification, embeddings and answers .-> R
+    OR -.-> RET
+    OR -.-> A
+
+    A --> O[Response]
+    T --> O
+    H --> O
 ```
 
 Each turn follows a finite graph with a hard step bound. There is no autonomous tool loop.
