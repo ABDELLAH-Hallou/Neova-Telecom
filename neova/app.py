@@ -1,4 +1,4 @@
-"""Local FastAPI application hosting the foundation graph and SQLite seed."""
+"""Local FastAPI application hosting the customer agent and SQLite seed."""
 
 from contextlib import asynccontextmanager
 
@@ -7,20 +7,21 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 from . import customer_api, db
 from .config import ConfigurationError
 from .dto import (
+    AgentChatRequest,
+    AgentChatResult,
     AppointmentRead,
     AppointmentRequest,
     AppointmentResult,
     ChatRequest,
     CustomerSummary,
     DemoSessionRequest,
-    GraphRequest,
     HandoffRequest,
     HandoffResult,
     IncidentRead,
     SlotRead,
 )
 from .db import close_session_connections, init_db
-from .graph import compiled
+from .graph import run_conversation
 from .models import chat_model
 from .session import fixture_customers, issue_session
 
@@ -36,10 +37,21 @@ async def lifespan(app: FastAPI):
         app.state.db_ready = False # shutdown
 
 
-app = FastAPI(lifespan=lifespan, title="Neova Foundation API")
+app = FastAPI(lifespan=lifespan, title="Neova Telecom Customer Agent API")
 
 
 def demo_session(x_demo_session: str | None = Header(default=None, alias="X-Demo-Session")) -> tuple[str, str]:
+    return x_demo_session, customer_api.bound_customer(x_demo_session)
+
+
+def optional_demo_session(x_demo_session: str | None = Header(default=None, alias="X-Demo-Session")) -> tuple[str | None, str | None]:
+    """Bound the session when one is presented; anonymous otherwise.
+
+    Anonymous turns get public-corpus answers and a generic human route
+    without any private data and without stored records.
+    """
+    if x_demo_session is None:
+        return None, None
     return x_demo_session, customer_api.bound_customer(x_demo_session)
 
 
@@ -97,7 +109,7 @@ def create_handoff(request: HandoffRequest, session: tuple[str, str] = Depends(d
 def health():
     return {
         "status": "ok",
-        "mode": "foundation",
+        "mode": "customer_agent",
         "db_ready": app.state.db_ready,
         "fixture_customers": len(fixture_customers()),
     }
@@ -112,16 +124,20 @@ def create_demo_session(request: DemoSessionRequest):
         raise HTTPException(status_code=404, detail="Unknown fixture customer") from None
 
 
-@app.post("/foundation/graph")
-def run_graph(graph_request: GraphRequest):
-    """Exercise the bounded graph, never a customer-facing reply."""
-    result = compiled.invoke({"input": graph_request.prompt, "history": []})
-    return {"classification": result["classification"], "output": result["output"]}
+@app.post("/agent/chat", response_model=AgentChatResult)
+def agent_chat(request: AgentChatRequest, session: tuple[str | None, str | None] = Depends(optional_demo_session)):
+    """One bounded conversation turn: named routes, grounded French answer,
+    deterministic booking confirmation, immediate handoffs."""
+    token, customer_id = session
+    return run_conversation(
+        request.message, [message.model_dump() for message in request.history],
+        token, customer_id)
 
 
 @app.post("/models/chat")
 def run_model_chat(request: ChatRequest):
-    """Invoke the selected provider without changing the foundation graph."""
+    """Invoke the selected provider directly; the conversation graph does
+    its own bounded model calls via ``neova.nodes.french_answer``."""
     try:
         model = chat_model(request.provider)
     except ConfigurationError as error:

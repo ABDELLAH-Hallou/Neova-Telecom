@@ -1,11 +1,10 @@
-"""Run the local, single-process foundation API."""
+"""Run the local, single-process Neova Telecom Customer Agent API."""
 
 import uvicorn
 
 
 def main() -> None:
-    print("Starting Neova foundation on http://127.0.0.1:8000", flush=True)
-    print("Local API only: customer conversations are not implemented.", flush=True)
+    print("Starting Neova Telecom Customer Agent on http://127.0.0.1:8000", flush=True)
     uvicorn.run("neova.app:app", host="127.0.0.1", port=8000, reload=False)
 
 

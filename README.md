@@ -1,8 +1,8 @@
-# Néova Local API — Issues #2–#3
+# Néova Telecom Customer Agent API
 
-Local foundation and fixture-backed customer API for the Néova customer-relations agent.
+Local fixture-backed customer API and bounded French conversation agent (LangGraph) for the Néova customer-relations agent.
 
-This version provides SQLite persistence, demo sessions, a configurable clock, scoped reads, atomic booking and handoff storage, and a minimal LangGraph. It does not provide customer conversations yet.
+This version provides SQLite persistence, demo sessions, a configurable clock, scoped reads, atomic booking and handoff storage, hybrid retrieval over the public corpus, and a bounded conversation graph (`POST /agent/chat`) with named routes, deterministic booking confirmation and human handoffs.
 
 ## Run the application
 
@@ -17,13 +17,13 @@ Create your local configuration:
 cp .env.example .env
 ```
 
-The foundation requires `DATABASE_URL`, which is already defined in `.env.example`:
+The API requires `DATABASE_URL`, which is already defined in `.env.example`:
 
 ```dotenv
 DATABASE_URL=sqlite:///./neova.db
 ```
 
-The optional `/models/chat` endpoint requires `OPENROUTER_API_KEY` and `CHAT_MODEL` for OpenRouter, or `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` for OpenAI. The foundation endpoints run without either key.
+The conversation graph and the optional `/models/chat` endpoint require `OPENROUTER_API_KEY` and `CHAT_MODEL` for OpenRouter, or `OPENAI_API_KEY` and `OPENAI_CHAT_MODEL` for OpenAI. The customer API routes and the booking flow run without either key.
 
 Start the server:
 
@@ -51,8 +51,8 @@ Stop the server with `Ctrl+C`.
 | --- | --- | --- |
 | `GET` | `/health` | Check API and database startup |
 | `POST` | `/demo/sessions` | Create a local session for a fixture customer |
-| `POST` | `/foundation/graph` | Exercise the placeholder LangGraph |
-| `POST` | `/models/chat` | Call either configured chat provider |
+| `POST` | `/agent/chat` | One bounded conversation turn (French agent; optional `X-Demo-Session`) |
+| `POST` | `/models/chat` | Call either configured chat provider directly |
 | `GET` | `/customers/{id}/summary` | Session customer's minimal account summary |
 | `GET` | `/incidents` | Linked and area-only incidents (scope clearly labeled) |
 | `GET` | `/slots?customer_id=...` | Future, available slots covering the session customer's postcode |
@@ -73,7 +73,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "mode": "foundation",
+  "mode": "customer_agent",
   "db_ready": true,
   "fixture_customers": 6
 }
@@ -113,25 +113,27 @@ curl -X POST -H "X-Demo-Session: $TOKEN" -H 'Content-Type: application/json' \
   http://127.0.0.1:8000/handoffs
 ```
 
-Booking the supplied dates requires the **explicit frozen demo clock** below. The API returns a saved appointment ID on success; replaying the same key for the same customer/slot/reason returns that ID. An invalid, unavailable, past, cross-customer or conflicting request never confirms a booking. Explicit **user** confirmation before making this API call belongs to the later conversation graph. Handoff IDs represent stored local records, not an accepted advisor queue. `GET /incidents` labels postcode-only coverage `area_only`, never as proof a customer is affected.
+Booking the supplied dates requires the **explicit frozen demo clock** below. The API returns a saved appointment ID on success; replaying the same key for the same customer/slot/reason returns that ID. An invalid, unavailable, past, cross-customer or conflicting request never confirms a booking. In the conversation, an explicit **user** "oui" to the exact slot and reason is required before this API call is ever made. Handoff IDs represent stored local records, not an accepted advisor queue. `GET /incidents` labels postcode-only coverage `area_only`, never as proof a customer is affected.
 
-Test the placeholder graph:
+## Talk to the agent
 
 ```bash
-curl -i -X POST \
-  http://127.0.0.1:8000/foundation/graph \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Bonjour, je souhaite comprendre ma facture"}'
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/demo/sessions \
+  -H 'Content-Type: application/json' -d '{"customer_id":"NEO-88213"}' | cut -d'"' -f4)
+
+curl -X POST http://127.0.0.1:8000/agent/chat \
+  -H "X-Demo-Session: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Je veux prendre rendez-vous avec un technicien"}'
 ```
 
-Expected response:
+The reply includes the French answer, the chosen route, the tools called, the pending-booking confirmation state, citations and handoff reference when a handoff was stored. Without `X-Demo-Session`, the agent answers from the public corpus and offers a generic human route without any private data.
 
-```json
-{
-  "classification": "foundation_only",
-  "output": "Foundation mode: the customer agent is not implemented yet."
-}
-```
+## Conversation agent internals
+
+- **Routing order (per turn):** (1) deterministic prompt-injection check on the raw message — before any model call; (2) with a pending booking, exact known continuations (`oui`, `non`, `ok`, `confirmer`, `annuler`) and exact code phrases route straight to the booking flow without a classifier call — continuations only re-ask, they never confirm; (3) otherwise one cheap OpenRouter classification call (`CLASSIFIER_MODEL`, temperature 0, max_tokens 150, reasoning disabled, strict `json_schema` with `additionalProperties: false` and `provider.require_parameters: true`); (4) `out_of_scope` and `ambiguous` verdicts are protected — a pending booking never overrides them.
+- **Confirmation:** the agent proposes the exact Europe/Paris slot and reason with a one-time code: reply exactly `CONFIRMER RDV <code>` to book or `ANNULER RDV <code>` to cancel. Codes are random per proposal, expire after 10 minutes (wall-clock independent of the frozen demo clock), and a stale code can never book. Bare "oui" books nothing.
+- **Prompts** live in `neova/prompt/` (`classifier.md`, `answer.md`) — versioned Markdown, no prompt text in code.
+- **Degradation:** missing `CLASSIFIER_MODEL`, a network error or a schema violation falls back to the deterministic keyword router and is reported as `classification.degraded: true` in the trace; `classification.source` is `model`, `keywords` or `skipped`.
 
 ## Architecture
 
@@ -142,7 +144,8 @@ main.py
 FastAPI
    ├── health endpoint
    ├── demo-session endpoint
-   └── minimal LangGraph
+   ├── /agent/chat → bounded LangGraph (neova/graph.py + neova/nodes/)
+   └── /models/chat (direct model call)
            │
            ▼
         SQLite
@@ -161,7 +164,7 @@ The application runs in one local process.
 
 `neova/session.py` maps random tokens to fixture customers. Customer IDs are not accepted as session tokens.
 
-`neova/graph.py` contains a bounded placeholder graph. It makes no model calls and does not return customer information.
+`neova/graph.py` defines the bounded conversation graph state, its conditional wiring and the `run_conversation` entry point; each node lives in its own module under `neova/nodes/`. Every turn is a finite DAG with a hard step bound — no free-running agent loop.
 
 ## Clock
 
@@ -192,7 +195,7 @@ Timestamps without timezone information are rejected for booking validation.
 Run the offline tests:
 
 ```bash
-uv run --locked --extra dev python -m pytest tests/test_customer_api.py tests/test_foundation.py tests/test_models.py -q
+uv run --locked --extra dev python -m pytest tests/test_conversation.py tests/test_customer_api.py tests/test_foundation.py tests/test_models.py tests/test_retrieval.py -q
 ```
 
 The tests cover:
@@ -205,20 +208,22 @@ The tests cover:
 - SQLite connection reuse and cleanup
 - Live and frozen clock behavior
 - FastAPI lifespan
-- Health and graph endpoints
+- Health endpoint
 - Secret-safe configuration errors
 - Scoped customer reads, transactional booking, replay/concurrent claims and durable handoffs
+- Hybrid retrieval, evidence gate and citations over the public corpus
+- Bounded conversation routes, multi-turn booking confirmation, handoffs and privacy behavior
 
 The tests use temporary databases and make no network or OpenRouter requests.
 
 ## Current limitations
 
-This foundation does not yet implement:
+Not yet implemented:
 
-- Knowledge-base retrieval
-- Conversational confirmation and human queue integration
-- Model-backed customer agent (the chat endpoint is a direct model call)
-- Conversation evaluation
+- Provider retries, fallback and spend logging for model/embedding calls
+- Human queue integration beyond stored handoff records
+- Fixed evaluation set with measured results
+- Model-backed live tracing (Langfuse)
 
 The demo session is not production authentication. A real system would use an external identity provider and create a trusted principal after verifying the customer.
 

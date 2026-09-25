@@ -6,10 +6,10 @@ from pydantic import ValidationError
 from neova.dto import (
     MAX_IDENTIFIER_LENGTH,
     MAX_PROMPT_LENGTH,
+    AgentChatRequest,
     AppointmentRequest,
     ChatRequest,
     DemoSessionRequest,
-    GraphRequest,
     HandoffRequest,
 )
 
@@ -32,7 +32,7 @@ def test_request_models_reject_extra_fields():
     with pytest.raises(ValidationError):
         HandoffRequest.model_validate({**HANDOFF, "extra": "field"})
     with pytest.raises(ValidationError):
-        GraphRequest.model_validate({"prompt": "Bonjour", "extra": "injected instruction"})
+        AgentChatRequest.model_validate({"message": "Bonjour", "extra": "injected instruction"})
     with pytest.raises(ValidationError):
         ChatRequest.model_validate({"prompt": "Bonjour", "provider": "openrouter", "extra": 1})
     with pytest.raises(ValidationError):
@@ -82,14 +82,15 @@ def test_confirmation_key_rejects_empty_blank_and_oversized():
 
 def test_prompts_are_bounded():
     with pytest.raises(ValidationError):
-        GraphRequest.model_validate({"prompt": "x" * (MAX_PROMPT_LENGTH + 1)})
-    assert GraphRequest.model_validate({"prompt": "x" * MAX_PROMPT_LENGTH}).prompt
-    with pytest.raises(ValidationError):
         ChatRequest.model_validate({"prompt": "x" * (MAX_PROMPT_LENGTH + 1), "provider": "openai"})
+    assert ChatRequest.model_validate({"prompt": "x" * MAX_PROMPT_LENGTH, "provider": "openrouter"})
+    with pytest.raises(ValidationError):
+        AgentChatRequest.model_validate({"message": "x" * (MAX_PROMPT_LENGTH + 1)})
+    assert AgentChatRequest.model_validate({"message": "x" * MAX_PROMPT_LENGTH}).message
 
 
 def test_valid_requests_still_validate():
     assert AppointmentRequest.model_validate(APPOINTMENT).confirmation_key == "claim-1"
     assert HandoffRequest.model_validate(HANDOFF).urgency == "normal"
-    assert GraphRequest.model_validate({"prompt": "Bonjour"}).prompt == "Bonjour"
+    assert AgentChatRequest.model_validate({"message": "Bonjour"}).message == "Bonjour"
     assert DemoSessionRequest.model_validate({"customer_id": "NEO-88213"}).customer_id == "NEO-88213"

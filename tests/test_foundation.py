@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from neova import clock, config, db, session
 from neova.app import app
-from neova.graph import NOT_CUSTOMER_FACING
 from neova.utils import load_fixture
 
 FIXTURE = Path(__file__).resolve().parents[1] / "data" / "neova_data.json"
@@ -212,18 +211,15 @@ def test_session_boundary():
     assert session.SessionStore().validate(token) is None  # process-local store
 
 
-def test_health_graph_and_demo_selection(monkeypatch, database):
+def test_health_and_demo_selection(monkeypatch, database):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("DEMO_SESSION_SECRET", raising=False)
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json() == {
-            "status": "ok", "mode": "foundation", "db_ready": True, "fixture_customers": 6,
+            "status": "ok", "mode": "customer_agent", "db_ready": True, "fixture_customers": 6,
         }
-        graph = client.post("/foundation/graph", json={"prompt": "Bonjour, ma facture ?"})
-        assert graph.status_code == 200
-        assert graph.json() == {"classification": "foundation_only", "output": NOT_CUSTOMER_FACING}
         first, second = session.fixture_customers()[:2]
         issued = client.post("/demo/sessions", json={"customer_id": first})
         assert issued.status_code == 200
@@ -233,8 +229,8 @@ def test_health_graph_and_demo_selection(monkeypatch, database):
         assert session.validate_session(first) is None
         assert first not in token
         assert client.post("/demo/sessions", json={"customer_id": "UNKNOWN"}).status_code == 404
-        assert first not in graph.text and first not in health.text
-        assert "OPENROUTER_API_KEY" not in graph.text + health.text
+        assert first not in health.text
+        assert "OPENROUTER_API_KEY" not in health.text
         with db.session_connection(token) as session_conn:
             assert session_conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 6
     assert app.state.db_ready is False
