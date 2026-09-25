@@ -1,46 +1,181 @@
-# Néova Télécom — French customer agent
+# Néova Télécom — French Customer Agent
 
-One-process FastAPI customer service and bounded LangGraph conversation agent over the supplied fixture and public support corpus. Local demo only; no real customer authentication or advisor queue.
+A local French customer-service agent built with FastAPI, LangGraph and SQLite. It answers questions from the supplied support corpus, reads scoped customer information, books technician appointments and hands sensitive or unsupported requests to a human path.
 
-## Start and try it
+This is a take-home demo using fixture customers. Demo sessions are not production authentication, and handoff records are not connected to a real advisor queue.
 
-Prerequisites: Python 3.12+, [uv](https://docs.astral.sh/uv/), and the supplied repository assets. Copy `.env.example` to `.env` (`cp .env.example .env` on Unix; `Copy-Item .env.example .env` in PowerShell). Set `OPENROUTER_API_KEY`, `CHAT_MODEL`, `CLASSIFIER_MODEL`, and `EMBEDDING_MODEL` only if using live model calls. The key must have remaining budget; never commit `.env`. From the repository root, run **one server command**:
+## Quick start
+
+Requirements:
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- The supplied repository files
+
+Create the local configuration:
+
+```bash
+cp .env.example .env
+```
+
+PowerShell equivalent:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+The application can start without model credentials. From the repository root, run:
 
 ```bash
 uv run --locked --env-file .env -- python main.py
 ```
 
-Visit `http://127.0.0.1:8000/health` (200, `db_ready: true`) or `/docs`. Startup seeds a local SQLite database from the unchanged supplied JSON and indexes the **public corpus for FTS5**; it makes no paid embedding calls. To use semantic/hybrid vectors, explicitly run `uv run --locked --env-file .env -- python -m neova.retrieval index` with a configured embedding model and a key passing the $1 remaining-cap gate; this is an optional, separate preparation command and may consume credit. Without vectors or a key, public search still works via FTS5. For a disposable fresh demo database, set `DATABASE_URL=sqlite:///./neova-demo.db` in `.env`.
+Then open:
 
-Create a local fixture session with `POST /demo/sessions` (`{"customer_id":"NEO-88213"}`), then send its returned token in `X-Demo-Session` to `POST /agent/chat` (`{"message":"Je veux prendre rendez-vous avec un technicien"}`). See [curl walkthrough](docs/manual-e2e-curl.md) for detailed requests. Tokens expire with the process and selecting a fixture ID is **not** identity proof. Anonymous chat cannot read customer data. The supplied appointment slots are in August–September 2026: at today's live clock they are past and cannot be booked. For a clearly labeled fixture demo, set `CLOCK_MODE=frozen` and `DEMO_TIMESTAMP=2026-08-26T12:00:00+02:00` before starting; a booking needs the user's exact `CONFIRMER RDV <code>` for the proposed slot and reason. A bare “oui” does not book.
+- Health check: `http://127.0.0.1:8000/health`
+- Swagger API: `http://127.0.0.1:8000/docs`
 
-## Graph and model settings
+Startup seeds SQLite from the unchanged fixture and builds an FTS5 index over the public corpus. It does not make paid embedding calls.
+
+For detailed API and conversation examples, see the [curl walkthrough](docs/manual-e2e-curl.md).
+
+### Demo appointments
+
+The supplied appointment slots are dated August–September 2026. They are rejected when they are in the past.
+
+To reproduce the fixture scenario, configure:
+
+```dotenv
+CLOCK_MODE=frozen
+DEMO_TIMESTAMP=2026-08-26T12:00:00+02:00
+```
+
+Restart the server after changing these values.
+
+Create a session using `POST /demo/sessions`, then send its token through the `X-Demo-Session` header. A booking is saved only after the user replies with the exact one-time phrase:
+
+```text
+CONFIRMER RDV <code>
+```
+
+A bare `oui` does not create an appointment.
+
+## Retrieval modes
+
+| Situation | Retrieval behavior |
+| --- | --- |
+| Clean keyless startup | Public FTS5 keyword search |
+| Vector index available | Hybrid semantic + FTS5 search |
+| Embedding request fails | Visible FTS5 fallback |
+| Internal documents | Never indexed or returned |
+
+Hybrid retrieval combines cosine similarity over cached embeddings with SQLite FTS5 rankings using reciprocal-rank fusion.
+
+To build the optional semantic vector index:
+
+```bash
+uv run --locked --env-file .env -- python -m neova.retrieval index
+```
+
+This requires `OPENROUTER_API_KEY` and `EMBEDDING_MODEL`. It is protected by a remaining-budget check and may consume OpenRouter credit.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    User[Customer / demo session] --> API[FastAPI: /agent/chat]
-    API --> Graph[Bounded LangGraph: guard / classify / route]
-    Corpus[Public support corpus] --> Index[SQLite FTS5 index]
-    Index --> Graph
-    Graph --> Tools[Scoped customer API tools]
-    Tools --> DB[(SQLite: fixture, bookings, handoffs)]
-    Graph -. optional model calls .-> OR[OpenRouter: classifier, chat, embeddings]
-    Graph --> Reply[French answer, booking result, or handoff offer]
-    Reply --> User
+    U[Customer] --> API[FastAPI]
+    API --> G[Bounded LangGraph]
+    G --> R[Public retrieval]
+    R --> F[FTS5]
+    R -. optional .-> V[Cached embeddings]
+    G --> T[Scoped customer tools]
+    T --> DB[(SQLite)]
+    G -. optional .-> OR[OpenRouter]
+    G --> H[Answer, booking or handoff]
 ```
 
-The graph is a finite DAG, not an autonomous loop. It routes unsupported account changes to a human offer; saved handoffs have local IDs, **not** queue acceptance. `.env.example` sets `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`. Names live in environment variables, not code. Earlier live tracing observed an answer from `mistralai/mistral-small-3.2-24b-instruct` (French-capable primary); `openai/gpt-4.1-nano` as classifier returned 404 with strict parameter routing and fell back to keyword classification. `qwen/qwen3-embedding-8b` was configured but **not** validated on a populated live index. `CHAT_FALLBACK_MODEL` was unset and its upstream route was **not** verified. These are observations/configured names, not a verified complete model stack; choose and verify replacements with budget before claiming a working live fallback. Optional Langfuse tracing uses its own blank-by-default keys; see [tracing evidence](docs/langfuse-tracing-evidence.md).
+Each turn follows a finite graph with a hard step bound. There is no autonomous tool loop.
 
-## Measurement and trade-offs
+The graph performs deterministic injection checks before model calls, classifies the request, reads only the required customer data, retrieves public evidence and then answers, books or offers a handoff. Appointment writes are atomic and idempotent.
 
-Run the repeatable **offline** evaluation with `uv run --locked --extra dev python -m neova.eval` and the full suite with `uv run --locked --extra dev python -m pytest tests -q`. Issue #7 recorded **12/12 passed, 0 failed**: routing 1/1, grounding 3/3, booking 2/2, handoff 2/2, resilience 3/3, privacy 1/1. It uses a frozen clock, fake chat/embeddings, keyword routing and injected 500/429/529; this tests decisions, state and safe response shape, **not live French answer accuracy**. No live evaluation score or verified fallback exists. Cases, rubric, actual outputs and failure analysis are in [`eval/`](eval/) and [#7's report](docs/issue-7-evaluation-security-report.md).
+## Model configuration
 
-Recorded offline eval model spend: **$0**. Earlier, partial app tracing logged **$0.000159 known chat cost** and four classifier calls with **unknown** cost; embeddings are absent from that ledger. A past supplied-key query showed **$14.982852627 used / $15 cap**, including assistant/app usage that cannot be attributed separately; the brief specified a $10 cap. These figures overlap and must not be added. Combined take-home spend is **unknown beyond the historical total snapshot**; no fresh key reading or live eval was attempted this cycle. Missing cost is unknown, never zero.
+Model names are configured through environment variables so reviewers can replace them:
 
-| Decision | Trade-off |
-| --- | --- |
-| Bounded LangGraph routes and confirmation code | Inspectable, finite writes; less flexible than a free-form tool agent. |
-| Public-only FTS5 on startup; optional cached embeddings | Keyless clean start and exact-term coverage; French semantic paraphrases need budget-gated indexing. |
-| SQLite-backed fixture API and minimal handoffs | Atomic local booking and traceable handoff ID; demo tokens are not authentication and there is no live advisor queue. |
+```dotenv
+CLASSIFIER_MODEL=
+CHAT_MODEL=
+CHAT_FALLBACK_MODEL=
+EMBEDDING_MODEL=
+```
 
-**Known limits:** previously observed classifier 404, unverified fallback/embedding route, no live score, past fixture slots in live time, and no supported cancellation, payment, contract termination or live advisor dispatch. With two more days: verify a French classifier/fallback on distinct upstream routes within a funded cap, run and analyze a small live French evaluation on an indexed corpus, then connect real identity/queue systems and test those boundaries. [Delivery smoke and repository evidence](docs/issue-8-final-delivery-evidence.md) records what was actually checked.
+Observed live status:
+
+- `mistralai/mistral-small-3.2-24b-instruct` produced a successful French answer.
+- `openai/gpt-4.1-nano` returned 404 under strict structured-output routing and degraded to the keyword classifier.
+- `qwen/qwen3-embedding-8b` was configured but not verified on a populated live vector index.
+- No distinct fallback route was configured or verified.
+
+These observations are not presented as a fully verified live model stack. Without working model configuration, the API, FTS5 retrieval and deterministic booking paths remain available, while model-dependent answers degrade visibly.
+
+Optional Langfuse tracing is disabled unless its environment keys are configured. See the [tracing evidence](docs/langfuse-tracing-evidence.md).
+
+## Evaluation and tests
+
+Run the fixed offline evaluation:
+
+```bash
+uv run --locked --extra dev python -m neova.eval
+```
+
+Run the full test suite:
+
+```bash
+uv run --locked --extra dev python -m pytest tests -q
+```
+
+Measured offline result: **12/12 cases passed, 0 failed**.
+
+| Category | Result |
+| --- | ---: |
+| Routing | 1/1 |
+| Grounding | 3/3 |
+| Booking | 2/2 |
+| Handoff | 2/2 |
+| Resilience | 3/3 |
+| Privacy | 1/1 |
+
+The evaluation uses a frozen clock, fake chat and embedding models, keyword classification and injected API 500/OpenRouter 429/529 failures. It measures routing, state changes, retrieval behavior and safe failure shapes—not live French answer quality. The complete suite recorded **200 passing tests** with one upstream Starlette deprecation warning.
+
+Cases, checks and actual outputs are available in [`eval/`](eval/) and the [evaluation report](docs/issue-7-evaluation-security-report.md).
+
+### Spend
+
+The offline evaluation made no paid calls.
+
+Earlier partial tracing recorded **$0.000159 of known chat cost**, plus four classifier calls whose cost was unavailable. Embedding cost was not present in that ledger. A historical key query showed **$14.982852627 used from a $15 cap**, including assistant and application usage that cannot be separated. These values overlap and must not be added; total project spend by component remains unknown.
+
+## Three design decisions
+
+| Decision | Benefit | Trade-off |
+| --- | --- | --- |
+| Bounded graph and exact confirmation code | Inspectable flow and controlled state changes | Less flexible than a free-form autonomous agent |
+| FTS5 startup with optional cached embeddings | Search works immediately without spending credit | Semantic French paraphrases require explicit vector indexing |
+| SQLite API with minimal handoff records | Atomic bookings and reproducible local execution | Demo sessions are not authentication and no real advisor queue exists |
+
+## Known limitations
+
+- The classifier, fallback route and embedding model are not fully verified live.
+- There is no live-model evaluation score.
+- Fixture appointments are in the past under later live dates.
+- Cancellation, payment, real contract termination and advisor dispatch are unsupported.
+- Demo sessions only separate fixture customers; they do not prove identity.
+- Langfuse and usage logs must never be treated as storage for private customer data.
+
+With two more days, I would:
+
+1. Verify a French classifier and a fallback served by a different upstream provider.
+2. Build the live vector index and run a small budget-gated French evaluation with failure analysis.
+3. Replace demo identity and local handoffs with real authentication and advisor-queue integrations.
+
+See the [final delivery evidence](docs/issue-8-final-delivery-evidence.md) for the clean-start smoke test, integrity checks and detailed limitations.
